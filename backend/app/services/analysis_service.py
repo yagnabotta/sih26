@@ -27,6 +27,9 @@ def execute_ai_analysis(db: Session, report: SafetyReport) -> AIAnalysis:
                 report_id=report.id,
                 organization_id=report.organization_id,
                 analysis_context=raw_result["analysis_context"],
+                classification=raw_result.get("classification"),
+                sif_status=raw_result.get("sif_status"),
+                root_cause=raw_result.get("root_cause"),
                 identified_action=raw_result["identified_action"],
                 identified_condition=raw_result["identified_condition"],
                 identified_event=raw_result["identified_event"],
@@ -42,6 +45,9 @@ def execute_ai_analysis(db: Session, report: SafetyReport) -> AIAnalysis:
             db.add(analysis)
         else:
             analysis.analysis_context = raw_result["analysis_context"]
+            analysis.classification = raw_result.get("classification")
+            analysis.sif_status = raw_result.get("sif_status")
+            analysis.root_cause = raw_result.get("root_cause")
             analysis.identified_action = raw_result["identified_action"]
             analysis.identified_condition = raw_result["identified_condition"]
             analysis.identified_event = raw_result["identified_event"]

@@ -497,99 +497,183 @@ function getDynamicConfidence(hazard, energy, exposure, barrierStatus, text) {
 }
 
 function analyzeSafetyObservation(text, rType) {
-  const lower = (text || '').toLowerCase();
+  const lower = (text || '').toLowerCase().trim();
 
   // 1. Hazard
   let hazard = 'Insufficient Information';
-  if (/slip\w*|slippery|slick|trip|uneven surface|water on floor/i.test(lower)) {
-    hazard = 'Slip / Fall';
-  } else if (/overhead|suspended load|crane lift|rigging|dropped object/i.test(lower)) {
-    hazard = 'Suspended Load & Dropped Object';
+  if (/slip\w*|slippery|slick|trip|uneven surface|water on floor|oily floor|oil.*leak/i.test(lower)) {
+    hazard = 'Slip / Fall Hazard (Walking-Working Surface)';
+  } else if (/heat|extreme heat|cooling system|heat stroke|heat exhaustion|high temperature|ambient heat/i.test(lower)) {
+    hazard = 'Heat Exposure & Thermal Environmental Hazard';
+  } else if (/hot pipe|hot surface|touching.*hot|hot equipment|scalding/i.test(lower)) {
+    hazard = 'Hot Surface & Thermal Hazard';
+  } else if (/suspended load|overhead load|crane lift|rigging|dropped object|falling pipe/i.test(lower)) {
+    hazard = 'Suspended Load & Dropped Object Hazard';
   } else if (/height|scaffold|ladder|roof|edge|climbing/i.test(lower)) {
-    hazard = 'Work at Height & Fall';
-  } else if (/electr|voltage|arc flash|switchboard|breaker|live wire/i.test(lower)) {
-    hazard = 'Electrical Arc Flash & Shock';
+    hazard = 'Work at Height & Fall Hazard';
+  } else if (/conductor|live conductor|insulation|electr|voltage|arc flash|switchboard|breaker|live wire/i.test(lower)) {
+    hazard = 'Electrical Arc Flash & Shock Hazard';
   } else if (/gas|pipeline|propane|lpg|cylinder|compressor|hiss/i.test(lower)) {
     hazard = 'Flammable Gas Leakage';
-  } else if (/pressur|hydraulic|steam|line break|hydrotest/i.test(lower)) {
+  } else if (/pressure release|high-pressure release|uncontrolled.*pressure|pressur|hydraulic|steam|line break|hydrotest/i.test(lower)) {
     hazard = 'Hazardous Pressure & Line Release';
   } else if (/fire|flame|spark|welding|hot work|combustible/i.test(lower)) {
-    hazard = 'Fire & Thermal Ignition';
+    hazard = 'Fire & Thermal Ignition Hazard';
   } else if (/chemical|acid|caustic|solvent|corrosive/i.test(lower)) {
     hazard = 'Hazardous Chemical Exposure';
-  } else if (/forklift|vehicle|truck|dumper|loader/i.test(lower)) {
-    hazard = 'Mobile Equipment & Vehicle Interaction';
-  } else if (/rotating|pinch|conveyor|roller|blade|entangle/i.test(lower)) {
-    hazard = 'Rotating Machinery & Pinch Point';
+  } else if (/moving vehicle|struck by.*vehicle|vehicle.*plant|forklift|vehicle|truck|dumper|loader/i.test(lower)) {
+    hazard = 'Mobile Equipment & Vehicle Interaction Hazard';
+  } else if (/rotating|pinch|conveyor|roller|blade|entangle|machine guard|machinery without/i.test(lower)) {
+    hazard = 'Rotating Machinery & Entanglement Hazard';
   }
 
   // 2. Energy Vector
   let energyVector = 'Insufficient Information';
-  if (hazard === 'Slip / Fall' || /slip|slippery|slick|wet floor/i.test(lower)) {
-    energyVector = 'Gravity / Kinetic';
-  } else if (/electr|voltage|415v|11kv|arc/i.test(lower)) {
-    energyVector = 'Electrical';
-  } else if (/gas|pressure|pneumatic|hydraulic|steam/i.test(lower)) {
-    energyVector = 'Pneumatic / High Pressure';
-  } else if (/fire|flame|spark|welding|thermal|hot/i.test(lower)) {
-    energyVector = 'Thermal';
+  if (/heat|extreme heat|hot pipe|hot surface|cooling system|thermal|fire|flame|spark/i.test(lower)) {
+    energyVector = 'Thermal Energy';
+  } else if (/live conductor|conductor|insulation|electr|voltage|415v|11kv|arc/i.test(lower)) {
+    energyVector = 'Electrical Energy';
+  } else if (/pressure release|high-pressure release|uncontrolled.*pressure|gas|pressure|pneumatic|hydraulic|steam/i.test(lower)) {
+    energyVector = 'Stored Pressure / Pneumatic & Hydraulic Energy';
+  } else if (/moving vehicle|struck by.*vehicle|vehicle.*plant|vehicle|truck|forklift/i.test(lower)) {
+    energyVector = 'Kinetic Energy';
+  } else if (/rotating|machinery|roller|blade|nip point|machine guard/i.test(lower)) {
+    energyVector = 'Mechanical Energy';
   } else if (/height|scaffold|ladder|roof|edge|dropped/i.test(lower)) {
     energyVector = 'Gravity';
-  } else if (/vehicle|truck|forklift|moving|roller|kinetic/i.test(lower)) {
-    energyVector = 'Kinetic';
+  } else if (/slip\w*|slippery|slick|wet floor|oily floor|oil leaked/i.test(lower)) {
+    energyVector = 'Gravity / Kinetic';
   } else if (/chemical|acid|toxic|caustic/i.test(lower)) {
-    energyVector = 'Chemical';
+    energyVector = 'Chemical / Toxic Energy';
   }
 
   // 3. Worker Exposure
   let workerExposure = 'Insufficient Information';
-  if (hazard === 'Slip / Fall' || /slip|slippery|slick|walking|entrance|door/i.test(lower)) {
-    workerExposure = 'Potential slip/fall exposure';
+  if (/hot pipe|hot surface|touching.*hot/i.test(lower)) {
+    workerExposure = 'Direct contact with hot surface / thermal equipment';
+  } else if (/heat|extreme heat|cooling system|high temperature|heat-rest/i.test(lower)) {
+    workerExposure = 'Exposure to excessive heat / elevated thermal environment';
+  } else if (/live.*conductor|energized conductor|contact.*energized|near energized/i.test(lower)) {
+    workerExposure = 'Worker in direct physical proximity or potential contact with live electrical conductors';
+  } else if (/struck by.*vehicle|moving vehicle|vehicle.*plant|pedestrian/i.test(lower)) {
+    workerExposure = 'Pedestrian worker situated in immediate trajectory of mobile equipment';
+  } else if (/uncontrolled.*pressure|pressure release/i.test(lower)) {
+    workerExposure = 'Worker situated in direct line-of-fire of uncontrolled pressure release';
   } else if (/under load|beneath|in drop zone/i.test(lower)) {
     workerExposure = 'Worker directly exposed in line-of-fire beneath suspended load';
   } else if (/at height|on scaffold|on roof|near edge/i.test(lower)) {
     workerExposure = 'Worker exposed to unprotected fall edge at elevation';
-  } else if (/live panel|touching|bare hands|near electrical/i.test(lower)) {
-    workerExposure = 'Worker in direct physical proximity to live electrical conductors';
-  } else if (/pedestrian|walking path|blind turn|near forklift/i.test(lower)) {
-    workerExposure = 'Pedestrian worker situated in immediate trajectory of mobile equipment';
+  } else if (/machinery without.*guard|unguarded.*machin/i.test(lower)) {
+    workerExposure = 'Worker limbs in proximity to unguarded mechanical movement';
+  } else if (/slip|slippery|slick|oily floor/i.test(lower)) {
+    workerExposure = 'Potential slip/fall exposure on compromised walking surface';
   }
 
   // 4. Barrier Status
   let barrierStatus = 'Insufficient Information';
-  if (/snapped|broke|failed|barrier failed|malfunctioned|cracked|gave way/i.test(lower)) {
+  if (/cooling system failed|damaged electrical insulation|damaged insulation|uncontrolled.*pressure|snapped|broke|failed|barrier failed/i.test(lower)) {
     barrierStatus = 'Barrier Failed';
-  } else if (/no harness|without harness|missing guard|no barricade|unbarricaded|without permit|no loto/i.test(lower)) {
+  } else if (/ignored.*heat-rest|without.*guard|no guard|missing guard|no harness|without permit|ignored.*ppe|without.*ppe/i.test(lower)) {
     barrierStatus = 'Barrier Missing';
   } else if (/safety net caught|harness arrested|interlock stopped|emergency stop activated|tripped breaker|alarm sounded/i.test(lower)) {
     barrierStatus = 'Barrier Intact';
+  } else if (/heat|extreme heat/i.test(lower)) {
+    barrierStatus = 'Insufficient information regarding heat controls';
   }
 
-  // 5. SIF Assessment (High-Energy Exposure + Worker Exposure + Barrier Deficiency -> SIF)
-  const isHighEnergy = ['Electrical', 'Chemical', 'Thermal', 'Pneumatic / High Pressure', 'Gravity'].includes(energyVector) && hazard !== 'Slip / Fall';
-  const hasExposure = workerExposure !== 'Insufficient Information';
-  const hasBarrierDefect = barrierStatus === 'Barrier Failed' || barrierStatus === 'Barrier Missing';
+  // 5. Dynamic Classification Logic
+  const hasNoInjury = /\b(not injured|no injury|no one was injured|no one injured|avoided injury|without injury)\b/i.test(lower);
+  const hasInjury = /\b(injured|injury|burns?|wound|cut|amputation|fracture|heat stroke|hospitaliz|hurt)\b/i.test(lower) && !hasNoInjury;
+  const hasNearMiss = /\b(almost slipped|nearly slipped|nearly struck|almost struck|nearly hit|nearly contacted|almost contacted|nearly came into contact|narrowly avoided|close call)\b/i.test(lower);
+  const hasUnsafeAct = /\b(ignored.*(heat-rest|schedule|ppe|rule|procedure|warning|permit)|operated.*without|operating.*without|without required|without the required|failed to wear|bypassed|entered.*restricted|without authorization|without following the required procedure)\b/i.test(lower);
 
-  let sifPrecursor = 'NO';
-  if (isHighEnergy && (hasExposure || hasBarrierDefect)) {
-    sifPrecursor = 'YES';
-  } else if (lower.trim().split(/\s+/).length < 3 && hazard === 'Insufficient Information') {
-    sifPrecursor = 'INSUFFICIENT_INFORMATION';
+  let classification = 'UNSAFE CONDITION';
+  let classificationCode = 'UNSAFE_CONDITION';
+  if (hasInjury) {
+    if (hasUnsafeAct) {
+      classification = 'UNSAFE ACT';
+      classificationCode = 'UNSAFE_ACT';
+    } else {
+      classification = 'UNSAFE CONDITION';
+      classificationCode = 'UNSAFE_CONDITION';
+    }
   } else {
-    sifPrecursor = 'NO';
+    if (hasNearMiss || (hasNoInjury && /\b(almost|nearly|narrowly|close call|slipped|contact|struck)\b/i.test(lower))) {
+      classification = 'NEAR MISS';
+      classificationCode = 'NEAR_MISS';
+    } else if (hasUnsafeAct) {
+      classification = 'UNSAFE ACT';
+      classificationCode = 'UNSAFE_ACT';
+    } else {
+      classification = 'UNSAFE CONDITION';
+      classificationCode = 'UNSAFE_CONDITION';
+    }
   }
+
+  // 6. Context-Derived Root Cause
+  let rootCause = 'Insufficient Information';
+  if (/ignored.*heat-rest/i.test(lower)) {
+    rootCause = 'Failure to follow the mandatory heat-rest schedule resulted in prolonged worker exposure to extreme heat and consequent injury.';
+  } else if (/cooling system failed/i.test(lower)) {
+    rootCause = 'Mechanical failure of the workspace cooling system resulted in excessive heat accumulation and consequent heat injury.';
+  } else if (/\b(heat|extreme heat)\b/i.test(lower) && !/welding|fire|hot pipe/i.test(lower)) {
+    rootCause = hasInjury
+      ? 'The reported injury appears to be associated with uncontrolled heat exposure; additional information is required to determine the specific underlying cause.'
+      : 'Excessive thermal environmental conditions created heat exposure hazard without adequate cooling or rest controls.';
+  } else if (/ignored.*ppe/i.test(lower) && /chemical|burn|acid/i.test(lower)) {
+    rootCause = 'Failure to follow required PPE controls resulted in worker exposure to the chemical hazard.';
+  } else if (/operated.*machin.*without.*guard|machinery without.*guard/i.test(lower)) {
+    rootCause = 'Operating machinery without the required safeguard in place resulted in direct worker contact with moving parts and injury.';
+  } else if (/oil was leaking|oil leaked/i.test(lower)) {
+    rootCause = 'Failure to control the equipment leak resulted in oil accumulation and created a slip hazard.';
+  } else if (/almost slipped/i.test(lower)) {
+    rootCause = 'Inadequate control of the walking surface condition created a slip potential, narrowly avoiding personnel injury.';
+  } else if (/damaged electrical insulation/i.test(lower)) {
+    rootCause = 'Physical degradation or mechanical damage to electrical insulation compromised energized conductor isolation.';
+  } else if (/nearly contacted/i.test(lower) && /conductor|electrical|wire/i.test(lower)) {
+    rootCause = 'Inadequate electrical isolation, guarding, or clearance boundaries allowed worker proximity to energized conductors.';
+  } else if (/uncontrolled.*pressure/i.test(lower)) {
+    rootCause = 'Loss of pressure containment or mechanical integrity failure resulted in an uncontrolled high-pressure energy release.';
+  } else if (/struck by.*vehicle/i.test(lower)) {
+    rootCause = 'Inadequate pedestrian segregation and traffic management controls allowed moving vehicle interaction with worker.';
+  } else if (classification === 'UNSAFE ACT') {
+    rootCause = 'Deviation from established operational safety protocols directly contributed to the observed event.';
+  } else if (classification === 'UNSAFE CONDITION' && hazard !== 'Insufficient Information') {
+    rootCause = 'Physical or environmental workplace hazards remained unmitigated, presenting operational risk.';
+  }
+
+  // 7. SIF Determination
+  const isSevereHeat = /\b(life-threatening|heat stroke|hospitaliz|critical|unconscious)\b/i.test(lower);
+  const isHighEnergy = (
+    /\b(uncontrolled.*pressure|high-pressure release|struck by.*vehicle|moving vehicle|live conductor|energized conductor|suspended load|dropped object|fall from height|machinery without.*guard|amputation)\b/i.test(lower) ||
+    (['Electrical Energy', 'Stored Pressure / Pneumatic & Hydraulic Energy', 'Kinetic Energy', 'Gravity'].includes(energyVector) && !hazard.includes('Slip')) ||
+    (energyVector === 'Thermal Energy' && isSevereHeat)
+  );
+
+  let sifPrecursor = isHighEnergy ? 'YES' : 'NO';
+  let sifStatus = isHighEnergy ? 'SIF' : 'NON-SIF';
 
   const riskScore = calculateDynamicRiskScore(hazard, energyVector, workerExposure, barrierStatus, sifPrecursor, text);
   const confidence = getDynamicConfidence(hazard, energyVector, workerExposure, barrierStatus, text);
   const recommendations = getDynamicRecommendations(hazard, text);
-  const explanation = getDynamicExplanation(sifPrecursor, hazard, energyVector, workerExposure, barrierStatus, text);
+  
+  let explanation = '';
+  if ((lower.includes('heat') || lower.includes('thermal')) && hasInjury && classification === 'UNSAFE CONDITION') {
+    explanation = 'The report describes an actual heat-related injury, so it is not a near miss. The available information does not identify unsafe worker behavior, so the event should not automatically be classified as an unsafe act. The reported context primarily indicates heat exposure as the hazard. No clear SIF pathway is established from the available information.';
+  } else {
+    explanation = getDynamicExplanation(sifPrecursor, hazard, energyVector, workerExposure, barrierStatus, text);
+  }
 
   return {
+    classification,
+    classificationCode,
+    sifStatus,
+    sifPrecursor,
     hazard,
     energyVector,
     workerExposure,
     barrierStatus,
-    sifPrecursor,
+    rootCause,
     riskScore,
     confidence,
     recommendations,
@@ -873,16 +957,18 @@ export default function AIAnalysisView() {
 
           const reasoning = backendResult.explanation || backendResult.why_identified?.summary || getDynamicExplanation(sifVal, backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, text);
 
+          const classifiedType = backendResult.classification || (rType === 'NEAR_MISS' ? 'NEAR MISS' : rType === 'UNSAFE_ACT' ? 'UNSAFE ACT' : 'UNSAFE CONDITION');
           const finalResult = {
             report_name: backendResult.report_name || reportName,
             sif_precursor: sifVal,
             confidence: confidence,
             risk_score: dynamicRiskScore,
-            classification: rType,
+            classification: classifiedType,
             hazard: backendResult.hazard,
             detected_hazards: hazards,
             energy_source: backendResult.energy_vector || (isSIF ? 'High Potential Energy Vector' : 'Gravity / Kinetic'),
             barrier_status: backendResult.barrier_status || 'Insufficient Information',
+            root_cause: backendResult.root_cause || (backendResult.why_identified?.root_cause) || 'Insufficient Information',
             iogp_rule: backendResult.life_saving_rule || (isSIF ? 'Line of Fire (LSR-03)' : 'Workplace Housekeeping Standards'),
             explainable_reasoning: reasoning,
             recommended_controls: recControls,
@@ -898,7 +984,7 @@ export default function AIAnalysisView() {
             id: Date.now(),
             report_reference: nextRef,
             report_name: finalResult.report_name,
-            report_type: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+            report_type: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
             description: text.slice(0, 100),
             location: loc,
             facility_unit: `${loc} Active Operations`,
@@ -910,9 +996,10 @@ export default function AIAnalysisView() {
             identified_hazard: finalResult.hazard || 'Operational Hazard',
             energy_source: finalResult.energy_source,
             barrier_status: finalResult.barrier_status,
+            root_cause: finalResult.root_cause,
             recommended_action: recControls[0] || 'Implement critical barrier control.',
             // Requirement 11: Store separate AI fields for human review compatibility
-            ai_classification: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+            ai_classification: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
             ai_sif_score: dynamicRiskScore,
             ai_confidence: confidence,
             human_classification: null,
@@ -967,16 +1054,18 @@ export default function AIAnalysisView() {
       const sifVal = dynamicAnalysis.sifPrecursor;
       const isSIF = sifVal === 'YES';
 
+      const classifiedType = dynamicAnalysis.classification || (rType === 'NEAR_MISS' ? 'NEAR MISS' : rType === 'UNSAFE_ACT' ? 'UNSAFE ACT' : 'UNSAFE CONDITION');
       const finalResult = {
         report_name: reportName,
         sif_precursor: sifVal,
         confidence: dynamicAnalysis.confidence,
         risk_score: dynamicAnalysis.riskScore,
-        classification: rType,
+        classification: classifiedType,
         hazard: dynamicAnalysis.hazard,
         detected_hazards: dynamicAnalysis.detectedHazards,
         energy_source: dynamicAnalysis.energyVector,
         barrier_status: dynamicAnalysis.barrierStatus,
+        root_cause: dynamicAnalysis.rootCause,
         iogp_rule: isSIF ? 'Critical Safety Standard' : 'Workplace Housekeeping Standards',
         explainable_reasoning: dynamicAnalysis.explanation,
         recommended_controls: dynamicAnalysis.recommendations,
@@ -995,7 +1084,7 @@ export default function AIAnalysisView() {
         id: Date.now(),
         report_reference: nextRef,
         report_name: finalResult.report_name,
-        report_type: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+        report_type: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
         description: text.slice(0, 100),
         location: loc,
         facility_unit: `${loc} Operating Bay`,
@@ -1007,9 +1096,10 @@ export default function AIAnalysisView() {
         identified_hazard: finalResult.hazard || 'Operational Hazard',
         energy_source: finalResult.energy_source,
         barrier_status: finalResult.barrier_status,
+        root_cause: finalResult.root_cause,
         recommended_action: finalResult.recommended_controls[0] || 'Implement critical barrier control.',
         // Requirement 11: Store separate AI fields for human review compatibility
-        ai_classification: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+        ai_classification: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
         ai_sif_score: finalResult.risk_score,
         ai_confidence: finalResult.confidence,
         human_classification: null,
@@ -1431,6 +1521,23 @@ export default function AIAnalysisView() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Root Cause Analysis Card */}
+                  {analysisResult.root_cause && (
+                    <div className="rounded-2xl border-2 border-stone-200 p-4 shadow-xs bg-white">
+                      <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/90 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-100/90 border border-amber-300 text-amber-900 text-xs font-black uppercase tracking-wider font-mono shadow-xs">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                            ROOT CAUSE ANALYSIS
+                          </span>
+                        </div>
+                        <p className="text-xs sm:text-sm font-bold text-slate-800 leading-relaxed pt-0.5">
+                          {analysisResult.root_cause}
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Section 2: Detected Hazards & Energy Vectors */}
                   <div className="rounded-2xl border-2 border-stone-200 p-4 shadow-xs bg-white">

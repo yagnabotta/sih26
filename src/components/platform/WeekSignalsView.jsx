@@ -97,92 +97,18 @@ export default function WeekSignalsView({ onNavigate }) {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [reviewToast, setReviewToast] = useState(null);
 
-  // Correlated Multi-Record Identification (Rule: >= 2 Records)
+  // Correlated Multi-Record Identification (Strictly based on actual signal source records)
   const activeRecords = useMemo(() => {
     if (!selectedSignal) return [];
     
-    // Check if signal has explicit source_reports or identifyingRecords
-    const fromDetail = (signalDetail?.source_reports || selectedSignal?.source_reports || []).map((rep, idx) => ({
-      ref: rep.report_id || `REP-ID001-000${idx + 1}`,
-      name: rep.pattern_identified || rep.short_description || selectedSignal.title,
-      unit: rep.unit || rep.facility_unit || rep.location || (idx === 0 ? 'Unit 1' : 'Gas Compressor Bay A'),
-      excerpt: rep.short_description || 'Field precursor telemetry logged.'
+    // Check if signal has explicit source_reports or signals
+    const rawList = signalDetail?.source_reports || selectedSignal?.source_reports || signalDetail?.signals || selectedSignal?.signals || [];
+    return rawList.map((rep, idx) => ({
+      ref: rep.report_id || rep.report_reference || (rep.id ? `REP-${rep.id}` : `S${idx + 1}`),
+      name: rep.pattern_identified || rep.short_description || rep.description || selectedSignal.title,
+      unit: rep.unit || rep.facility_unit || rep.location || 'Operating Area',
+      excerpt: rep.excerpt || rep.short_description || rep.description || 'Field observation logged.'
     }));
-
-    if (fromDetail.length >= 2) return fromDetail;
-
-    const query = `${selectedSignal.title || ''} ${selectedSignal.category || ''} ${selectedSignal.potential_sif_precursor || ''}`.toLowerCase();
-    const isGas = /gas|leak|flange|pipeline|pressure|hiss/.test(query);
-
-    const list = [...fromDetail];
-    
-    // Always include leading anchor record
-    if (list.length === 0) {
-      list.push({
-        ref: 'Current Analyzed Record',
-        name: selectedSignal.title || 'Main Pipeline High-Pressure Gas Leakage',
-        unit: 'Unit 1',
-        excerpt: selectedSignal.potential_sif_precursor || 'A high-pressure natural gas pipeline flange developed a severe gas leakage in the compressor area. Gas detectors alarmed at 65% LEL with loud gas hiss...'
-      });
-    }
-
-    if (isGas) {
-      const baselines = [
-        {
-          ref: 'REP-ID001-0001',
-          name: 'Compressor Station Natural Gas Pipeline Leakage',
-          unit: 'Gas Compressor Bay A',
-          excerpt: 'Pipeline flange gasket blowout released 70% LEL gas cloud across compressor bay near active electrical lights.'
-        },
-        {
-          ref: 'REP-ID001-0003',
-          name: 'LPG Storage Tank Flange Flammable Gas Leakage',
-          unit: 'LPG Storage Farm',
-          excerpt: 'Heavy propane leak pooling in low-lying ground trench near roadway without safety barricades.'
-        },
-        {
-          ref: 'REP-ID001-0005',
-          name: 'Staff Canteen Cooking Gas Stove Valve Micro-Leak',
-          unit: 'Staff Facility Kitchen',
-          excerpt: 'Slow micro-seep on gas valve connection causing localized fuel gas odor accumulation.'
-        },
-        {
-          ref: 'REP-ID001-0008',
-          name: 'Main Pipeline High-Pressure Gas Leakage',
-          unit: 'Unit 1 Operating Bay',
-          excerpt: 'A high-pressure natural gas pipeline flange developed a severe gas leakage in the compressor area. Gas detectors alarmed at 65% LEL with loud gas hiss...'
-        }
-      ];
-      baselines.forEach(b => {
-        if (!list.some(item => item.ref === b.ref)) list.push(b);
-      });
-    } else {
-      const baselines = [
-        {
-          ref: 'REP-ID001-0002',
-          name: 'Main Substation Electrical Cabinet Fire Outbreak',
-          unit: 'Electrical Substation 02',
-          excerpt: 'Electrical fire erupted inside 415V power distribution panel due to loose cable lug, producing 1.5m flames.'
-        },
-        {
-          ref: 'REP-ID001-0004',
-          name: 'Structural Welding Sparks Igniting Solvent Floor Fire',
-          unit: 'Fabrication Workshop Bay 4',
-          excerpt: 'Cutting torch sparks ignited cleaning solvent rags on floor, creating instant 2m open flame.'
-        },
-        {
-          ref: 'REP-ID001-0006',
-          name: 'Office Perimeter Smoldering & Insulation Breakdown',
-          unit: 'Office Perimeter Walkway',
-          excerpt: 'Smoldering paper and localized thermal hotspot near exterior power conduit routing.'
-        }
-      ];
-      baselines.forEach(b => {
-        if (!list.some(item => item.ref === b.ref)) list.push(b);
-      });
-    }
-
-    return list;
   }, [selectedSignal, signalDetail]);
 
   // Load Weak Signals & Emerging Clusters from backend or local safetyStore
@@ -196,13 +122,19 @@ export default function WeekSignalsView({ onNavigate }) {
         console.warn('Backend weak-signals API unreachable, falling back to local store:', backendErr);
       }
 
-      if (backendData && Array.isArray(backendData.weak_signals) && backendData.weak_signals.length > 0) {
-        setSummary(backendData.summary);
+      if (backendData && Array.isArray(backendData.weak_signals)) {
+        setSummary(backendData.summary || {
+          total_active_signals: backendData.weak_signals.length,
+          high_risk_precursors: backendData.weak_signals.filter(s => s.risk_level === 'High' || (s.risk_score && s.risk_score >= 90)).length,
+          escalating_patterns: backendData.weak_signals.filter(s => s.risk_score && s.risk_score >= 80).length,
+          average_confidence: backendData.weak_signals.length > 0 ? (backendData.summary?.average_confidence || 90.0) : 0,
+          total_clusters: Array.isArray(backendData.emerging_clusters) ? backendData.emerging_clusters.length : 0
+        });
         setSignals(backendData.weak_signals);
-        if (Array.isArray(backendData.emerging_clusters) && backendData.emerging_clusters.length > 0) {
+        if (Array.isArray(backendData.emerging_clusters)) {
           setClusters(backendData.emerging_clusters);
         } else {
-          // Derive clusters from signals with cluster_detected
+          // Derive clusters from signals with cluster_detected ONLY if >= 2 signals
           const derived = backendData.weak_signals
             .filter(s => s.cluster_detected && ((s.signals && s.signals.length >= 2) || (s.source_reports && s.source_reports.length >= 2)))
             .map((sig, idx) => ({
@@ -214,16 +146,18 @@ export default function WeekSignalsView({ onNavigate }) {
               signals: (sig.signals || (sig.source_reports || []).map((r, i) => ({
                 signal_num: i + 1,
                 report_id: r.report_id || `SIG-0${i+1}`,
-                description: r.short_description || r.excerpt || '',
-                individual_risk: 'MEDIUM',
-                location: r.unit || 'Operating Bay'
+                description: r.short_description || r.excerpt || r.description || '',
+                individual_risk: r.individual_risk || 'MEDIUM',
+                location: r.unit || r.location || 'Operating Area'
               }))),
-              individual_risk_levels: sig.signals?.map((s, i) => `Signal ${i+1}: ${s.risk_level || 'MEDIUM'}`).join(', ') || 'Signal 1: MEDIUM, Signal 2: MEDIUM/HIGH',
-              location: sig.location || (sig.source_reports?.[0]?.unit) || 'Unit 1 Operating Bay',
-              time_relationship: 'Active operational window (within 48 hours)',
-              correlation_score: sig.correlation_score || sig.risk_score || 92,
-              potential_consequence: sig.potential_consequence || sig.potential_sif_precursor || 'Fire/Explosion',
+              individual_risk_levels: sig.signals?.map((s, i) => `Signal ${i+1}: ${s.risk_level || s.individual_risk || 'MEDIUM'}`).join(', ') || 'Signal 1: MEDIUM, Signal 2: MEDIUM/HIGH',
+              location: sig.location || (sig.source_reports?.[0]?.unit) || 'Operating Area',
+              time_relationship: sig.time_relationship || 'Active operational window',
+              correlation_score: sig.correlation_score || sig.risk_score || 85,
+              potential_consequence: sig.potential_consequence || sig.potential_sif_precursor || 'Compound Hazard Escalation',
               combined_risk: (sig.combined_risk || 'HIGH').toUpperCase(),
+              danger: sig.danger || 'Elevated compound risk identified by interaction of multiple hazard vectors.',
+              root_cause: sig.root_cause || 'Concurrent breakdown or compromise of independent defensive barriers.',
               reason: sig.reason || sig.why_identified || 'Hazard interaction between co-located signals.',
               recommended_action: sig.recommended_action || sig.key_learnings || 'Immediately inspect and isolate affected area.',
               progression_steps: sig.progression_steps || []
@@ -232,23 +166,27 @@ export default function WeekSignalsView({ onNavigate }) {
         }
       } else {
         const stored = getStoredWeakSignals();
-        setSignals(stored);
+        setSignals(stored || []);
+        setClusters([]);
         setSummary({
-          total_active_signals: stored.length,
-          high_risk_precursors: stored.filter(s => s.risk_level === 'High' || (s.risk_score && s.risk_score >= 90)).length,
-          escalating_patterns: stored.filter(s => s.risk_score && s.risk_score >= 80).length,
-          average_confidence: 95.8
+          total_active_signals: (stored || []).length,
+          high_risk_precursors: (stored || []).filter(s => s.risk_level === 'High' || (s.risk_score && s.risk_score >= 90)).length,
+          escalating_patterns: (stored || []).filter(s => s.risk_score && s.risk_score >= 80).length,
+          average_confidence: (stored && stored.length > 0) ? 95.8 : 0,
+          total_clusters: 0
         });
       }
     } catch (err) {
       console.error('Failed to load weak signals:', err);
       const stored = getStoredWeakSignals();
-      setSignals(stored);
+      setSignals(stored || []);
+      setClusters([]);
       setSummary({
-        total_active_signals: stored.length,
-        high_risk_precursors: stored.filter(s => s.risk_level === 'High' || (s.risk_score && s.risk_score >= 90)).length,
-        escalating_patterns: stored.filter(s => s.risk_score && s.risk_score >= 80).length,
-        average_confidence: 95.8
+        total_active_signals: (stored || []).length,
+        high_risk_precursors: 0,
+        escalating_patterns: 0,
+        average_confidence: 0,
+        total_clusters: 0
       });
     } finally {
       setLoading(false);
@@ -257,84 +195,163 @@ export default function WeekSignalsView({ onNavigate }) {
 
   const SCENARIOS = [
     {
-      id: 'gas_ignition',
-      name: 'Gas Leak + Ignition Source (2 Signals)',
-      badge: 'HIGH / CRITICAL',
+      id: 'gas_heater',
+      name: 'Case 1: Gas Leak + Heater (Ignition Source)',
+      badge: 'FIRE / EXPLOSION',
       reports: [
         {
           report_id: 'REP-01',
-          description: 'Gas is leaking from a pipeline with loud hissing sound in the compressor area.',
+          description: 'High-pressure gas pipeline flange suffered severe leakage with loud hissing in compressor room.',
           location: 'Unit 1 Operating Bay',
-          report_type: 'Near Miss'
+          report_type: 'Near Miss',
+          report_date: '2026-09-08'
         },
         {
           report_id: 'REP-02',
-          description: 'Fire/ignition source detected near the pipeline with open electrical arcing switchgear.',
+          description: 'Operating workshop heater detected running 3 meters from compressor room pipeline.',
           location: 'Unit 1 Operating Bay',
-          report_type: 'Unsafe Condition'
+          report_type: 'Unsafe Condition',
+          report_date: '2026-09-08'
         }
       ]
     },
     {
-      id: 'gas_vent_ignition',
-      name: 'Gas Leak + Poor Ventilation + Ignition Source (3 Signals)',
-      badge: 'CRITICAL ESCALATION',
+      id: 'oil_slip',
+      name: 'Case 2: Hydraulic Oil Leak + Slip Exposure',
+      badge: 'SLIP / FALL',
       reports: [
         {
-          report_id: 'REP-101',
-          description: 'High-pressure gas pipeline flange leaking methane vapor into trench.',
-          location: 'Unit 1 Operating Bay',
-          report_type: 'Near Miss'
+          report_id: 'REP-03',
+          description: 'Hydraulic oil leak observed pooling beneath pump coupling P-102 onto walkway.',
+          location: 'Unit 2 Pump Bay',
+          report_type: 'Unsafe Condition',
+          report_date: '2026-09-08'
         },
         {
-          report_id: 'REP-102',
-          description: 'Forced-air ventilation fan failed, leading to poor ventilation and uncirculated gas accumulation.',
-          location: 'Unit 1 Operating Bay',
-          report_type: 'Unsafe Condition'
-        },
-        {
-          report_id: 'REP-103',
-          description: 'Maintenance worker operating angle grinder emitting hot slag sparks nearby.',
-          location: 'Unit 1 Operating Bay',
-          report_type: 'Unsafe Act'
+          report_id: 'REP-04',
+          description: 'Worker slipped on oily floor near walkway, lost footing and suffered wrist strain.',
+          location: 'Unit 2 Pump Bay',
+          report_type: 'Near Miss',
+          report_date: '2026-09-08'
         }
       ]
     },
     {
-      id: 'unrelated',
-      name: 'Unrelated Signals (Separate Locations - Rejected)',
-      badge: 'REJECT COMBINATION',
+      id: 'elec_proximity',
+      name: 'Case 3: Damaged Cable + Worker Proximity',
+      badge: 'ARC FLASH / SHOCK',
       reports: [
         {
-          report_id: 'REP-201',
-          description: 'Loose floor tile in executive office canteen walkway.',
-          location: 'Administration Building Canteen',
-          report_type: 'Unsafe Condition'
+          report_id: 'REP-05',
+          description: 'Electrical power cable has damaged insulation exposing live copper conductor.',
+          location: 'Substation Bay',
+          report_type: 'Unsafe Condition',
+          report_date: '2026-09-08'
         },
         {
-          report_id: 'REP-202',
-          description: 'Routine cooling water pump monthly inspection completed.',
-          location: 'Cooling Tower Area 5',
-          report_type: 'Routine'
+          report_id: 'REP-06',
+          description: 'Technician was working in close proximity to the exposed live conductor without protective insulation.',
+          location: 'Substation Bay',
+          report_type: 'Unsafe Act',
+          report_date: '2026-09-08'
+        }
+      ]
+    },
+    {
+      id: 'fall_guardrail',
+      name: 'Case 4: Worker at Height + Missing Guardrail',
+      badge: 'FALL FROM HEIGHT',
+      reports: [
+        {
+          report_id: 'REP-07',
+          description: 'Worker observed working at height on elevated platform 6 meters above ground.',
+          location: 'Platform 3 Elevated Deck',
+          report_type: 'Unsafe Act',
+          report_date: '2026-09-08'
+        },
+        {
+          report_id: 'REP-08',
+          description: 'Perimeter guardrail was missing on the elevated work deck with no fall protection in place.',
+          location: 'Platform 3 Elevated Deck',
+          report_type: 'Unsafe Condition',
+          report_date: '2026-09-08'
         }
       ]
     },
     {
       id: 'chemical_exposure',
-      name: 'Chemical Leak + Human Exposure (2 Signals)',
-      badge: 'HIGH TOXIC RISK',
+      name: 'Case 5: Chemical Leak + Worker Exposure',
+      badge: 'CHEMICAL INJURY',
       reports: [
         {
-          report_id: 'REP-301',
-          description: 'Corrosive chemical acid line flange leaking toxic solvent fumes.',
+          report_id: 'REP-09',
+          description: 'Chemical drum leaking acid solution onto the floor emitting caustic fumes.',
           location: 'Chemical Dosing Bay',
-          report_type: 'Near Miss'
+          report_type: 'Near Miss',
+          report_date: '2026-09-08'
         },
         {
-          report_id: 'REP-302',
-          description: 'Operator working without respirator or chemical-resistant PPE in immediate vapor cloud plume.',
+          report_id: 'REP-10',
+          description: 'Worker was directly exposed to chemical fumes without respiratory PPE.',
           location: 'Chemical Dosing Bay',
-          report_type: 'Unsafe Act'
+          report_type: 'Unsafe Act',
+          report_date: '2026-09-08'
+        }
+      ]
+    },
+    {
+      id: 'gas_damaged_wiring',
+      name: 'Case 6: Gas Leak + Damaged Wiring (Passive)',
+      badge: 'LATENT / CONDITIONAL',
+      reports: [
+        {
+          report_id: 'REP-11',
+          description: 'Gas pipeline leaking methane vapor near workshop cable tray.',
+          location: 'Unit 1 Compressor Area',
+          report_type: 'Near Miss',
+          report_date: '2026-09-08'
+        },
+        {
+          report_id: 'REP-12',
+          description: 'Damaged electrical wiring present nearby with cracked insulation along the tray.',
+          location: 'Unit 1 Compressor Area',
+          report_type: 'Unsafe Condition',
+          report_date: '2026-09-08'
+        }
+      ]
+    },
+    {
+      id: 'unrelated',
+      name: 'Case 7: Unrelated Observations (Independent)',
+      badge: 'REJECTED (NO CLUSTER)',
+      reports: [
+        {
+          report_id: 'REP-13',
+          description: 'Slip hazard due to water puddle on warehouse floor.',
+          location: 'Warehouse A',
+          report_type: 'Unsafe Condition',
+          report_date: '2026-09-08'
+        },
+        {
+          report_id: 'REP-14',
+          description: 'Minor vibration noticed on compressor C-101.',
+          location: 'Unit 3 Compressor Room',
+          report_type: 'Routine',
+          report_date: '2026-09-08'
+        }
+      ]
+    },
+    {
+      id: 'single_observation',
+      name: 'Case 8: Single Safety Observation',
+      badge: 'SINGLE PRECURSOR',
+      reports: [
+        {
+          report_id: 'REP-15',
+          description: 'Pressurized gas pipeline flange suffered severe leakage with loud hissing in compressor room.',
+          location: 'Unit 1 Operating Bay',
+          report_type: 'Near Miss',
+          report_date: '2026-09-08'
         }
       ]
     }
@@ -359,17 +376,8 @@ export default function WeekSignalsView({ onNavigate }) {
     loadWeakSignals();
 
     // Reactive subscription to safetyStore so any status, field changes, or new weak signals reflect automatically
-    const unsub = subscribeSafetyStore((newState) => {
-      const stored = getStoredWeakSignals();
-      if (stored && stored.length > 0) {
-        setSignals(stored);
-        setSummary({
-          total_active_signals: stored.length,
-          high_risk_precursors: stored.filter(s => s.risk_level === 'High' || (s.risk_score && s.risk_score >= 90)).length,
-          escalating_patterns: stored.filter(s => s.risk_score && s.risk_score >= 80).length,
-          average_confidence: 95.8
-        });
-      }
+    const unsub = subscribeSafetyStore(() => {
+      loadWeakSignals();
     });
 
     return unsub;
@@ -926,6 +934,29 @@ export default function WeekSignalsView({ onNavigate }) {
                   </div>
                 </div>
 
+                {(sandboxResult.danger || sandboxResult.root_cause) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    {sandboxResult.danger && (
+                      <div className="p-2.5 rounded-lg bg-rose-50/60 border border-rose-200 space-y-0.5">
+                        <span className="text-[10px] uppercase font-bold text-rose-800 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-rose-600" />
+                          <span>Identified Hazard / Danger:</span>
+                        </span>
+                        <p className="text-rose-950 leading-snug">{sandboxResult.danger}</p>
+                      </div>
+                    )}
+                    {sandboxResult.root_cause && (
+                      <div className="p-2.5 rounded-lg bg-orange-50/60 border border-orange-200 space-y-0.5">
+                        <span className="text-[10px] uppercase font-bold text-orange-800 flex items-center gap-1">
+                          <Activity className="w-3 h-3 text-orange-600" />
+                          <span>Systemic Root Cause:</span>
+                        </span>
+                        <p className="text-orange-950 leading-snug">{sandboxResult.root_cause}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-1 text-xs">
                   <span className="text-[10.5px] uppercase font-bold text-slate-400">Reason / Hazard Interaction:</span>
                   <p className="text-slate-700 leading-relaxed">{sandboxResult.reason}</p>
@@ -946,9 +977,11 @@ export default function WeekSignalsView({ onNavigate }) {
         {clusters.length === 0 ? (
           <div className="p-8 text-center bg-white rounded-2xl border border-stone-200 text-xs text-slate-500 space-y-2">
             <Layers className="w-8 h-8 text-slate-300 mx-auto" />
-            <p className="font-semibold text-slate-700">No multi-signal interaction clusters currently detected.</p>
-            <p className="text-slate-400 max-w-lg mx-auto">
-              The correlation engine continuously scans submitted safety reports. When related hazards (such as gas leaks and nearby ignition sources) co-occur, they will dynamically appear here as emerging risk clusters.
+            <p className="font-bold text-slate-800 text-sm tracking-wide uppercase font-heading">
+              NO EMERGING RISK SIGNALS YET
+            </p>
+            <p className="text-slate-500 max-w-lg mx-auto">
+              Submit safety observations to allow the AI Safety Engine to identify relationships and emerging risk clusters.
             </p>
           </div>
         ) : (
@@ -1092,7 +1125,31 @@ export default function WeekSignalsView({ onNavigate }) {
                   </div>
                 </div>
 
-                {/* 5. Reason & Recommended Action */}
+                {/* 5. Danger & Root Cause Callouts */}
+                {(cluster.danger || cluster.root_cause) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    {cluster.danger && (
+                      <div className="p-3 rounded-xl bg-rose-50/50 border border-rose-200/80 space-y-1">
+                        <span className="text-[10.5px] uppercase font-bold text-rose-800 flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <span>Identified Hazard / Danger:</span>
+                        </span>
+                        <p className="text-rose-950 text-xs leading-relaxed">{cluster.danger}</p>
+                      </div>
+                    )}
+                    {cluster.root_cause && (
+                      <div className="p-3 rounded-xl bg-orange-50/50 border border-orange-200/80 space-y-1">
+                        <span className="text-[10.5px] uppercase font-bold text-orange-800 flex items-center gap-1.5">
+                          <Activity className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                          <span>Systemic Root Cause:</span>
+                        </span>
+                        <p className="text-orange-950 text-xs leading-relaxed">{cluster.root_cause}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 6. Reason & Recommended Action */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pt-1">
                   <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#EAE6E1] space-y-1">
                     <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
@@ -1140,6 +1197,11 @@ export default function WeekSignalsView({ onNavigate }) {
           <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 text-xs text-slate-500 space-y-3">
             <RefreshCw className="w-6 h-6 text-[#FF5A36] animate-spin mx-auto" />
             <p>Querying dynamic weak signal clusters and neural assessments from backend...</p>
+          </div>
+        ) : signals.length === 0 ? (
+          <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 text-xs text-slate-500 space-y-2">
+            <p className="font-semibold text-slate-700 text-sm">No weak safety signals logged yet.</p>
+            <p className="text-slate-400">Submit safety observations to begin tracking early precursors and latent hazards.</p>
           </div>
         ) : filteredSignals.length === 0 ? (
           <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 text-xs text-slate-500 space-y-2">
@@ -1410,6 +1472,30 @@ export default function WeekSignalsView({ onNavigate }) {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Danger & Root Cause Callouts */}
+              {(selectedCluster.danger || selectedCluster.root_cause) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {selectedCluster.danger && (
+                    <div className="p-3.5 rounded-xl bg-rose-50/60 border border-rose-200 space-y-1">
+                      <span className="text-[11px] uppercase font-bold text-rose-800 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                        <span>Identified Hazard / Danger:</span>
+                      </span>
+                      <p className="text-rose-950 text-xs leading-relaxed">{selectedCluster.danger}</p>
+                    </div>
+                  )}
+                  {selectedCluster.root_cause && (
+                    <div className="p-3.5 rounded-xl bg-orange-50/60 border border-orange-200 space-y-1">
+                      <span className="text-[11px] uppercase font-bold text-orange-800 flex items-center gap-1.5">
+                        <Activity className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                        <span>Systemic Root Cause:</span>
+                      </span>
+                      <p className="text-orange-950 text-xs leading-relaxed">{selectedCluster.root_cause}</p>
+                    </div>
+                  )}
                 </div>
               )}
 

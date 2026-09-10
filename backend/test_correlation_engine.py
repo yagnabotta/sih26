@@ -287,28 +287,105 @@ def run_tests():
     print(">>> PASS: Authentication config and preset users intact!")
 
     # -------------------------------------------------------------
-    # Test 13: Full Organization DB Multi-Report Correlation
+    # Test 13: Full Organization DB Multi-Report Correlation & Empty State Verification
     # -------------------------------------------------------------
     print("\n--- TEST 13: Full Organization Correlation via Service ---")
     Base.metadata.create_all(bind=engine)
     seed_sample_data()
     db = SessionLocal()
     try:
+        from app.models.safety_report import SafetyReport
+        from app.models.ai_analysis import AIAnalysis
+
+        # Phase 1: 0 Reports -> Zero signals, Zero clusters, Clean empty state
         org_data = get_weak_signals_for_organization(db, "id001")
         summary = org_data["summary"]
         signals = org_data["weak_signals"]
-        print("Total Active Signals:", summary["total_active_signals"])
-        print("High Risk Precursors:", summary["high_risk_precursors"])
-        print("Escalating Patterns:", summary["escalating_patterns"])
-        assert summary["total_active_signals"] >= 2
-        assert len(signals) >= 2
+        clusters = org_data["emerging_clusters"]
+        print("Empty DB - Total Active Signals:", summary["total_active_signals"])
+        print("Empty DB - Total Clusters:", summary["total_clusters"])
+        assert summary["total_active_signals"] == 0, "Expected 0 signals for empty DB!"
+        assert len(signals) == 0, "Expected empty signals list for empty DB!"
+        assert len(clusters) == 0, "Expected empty clusters list for empty DB!"
+        print(">>> PASS: Empty DB correctly returns 0 signals and 0 clusters (no fake baseline reports injected).")
+
+        # Phase 2: 1 Report -> 1 Signal, Zero multi-report clusters
+        rep1 = SafetyReport(
+            organization_id="id001",
+            report_reference="REP-TEST-0001",
+            report_type="Unsafe Condition",
+            description="High-pressure gas pipeline flange suffered severe leakage with loud hissing in Unit 1.",
+            location="Unit 1",
+            report_date="2026-09-10",
+            analysis_status="COMPLETED"
+        )
+        db.add(rep1)
+        db.commit()
+        db.refresh(rep1)
+        analysis1 = AIAnalysis(
+            report_id=rep1.id,
+            organization_id="id001",
+            identified_hazard="Flammable Gas Leak",
+            sif_precursor_assessment="YES",
+            energy_source="High Pressure Gas",
+            barrier_information="Flange seal degraded",
+            explanation="Severe high-pressure gas release detected."
+        )
+        db.add(analysis1)
+        db.commit()
+
+        org_data_1 = get_weak_signals_for_organization(db, "id001")
+        print("1 Report - Signals:", len(org_data_1["weak_signals"]), "Clusters:", len(org_data_1["emerging_clusters"]))
+        assert len(org_data_1["weak_signals"]) == 1, "Expected 1 individual signal for 1 report!"
+        assert len(org_data_1["emerging_clusters"]) == 0, "Expected 0 clusters for 1 report (must not invent 2nd report)!"
+        assert org_data_1["weak_signals"][0]["source_reports"][0]["report_id"] == "REP-TEST-0001"
+        print(">>> PASS: 1 Report generates 1 individual safety signal and 0 multi-report clusters.")
+
+        # Phase 3: 2 Reports -> Multi-report cluster generated dynamically from user reports
+        rep2 = SafetyReport(
+            organization_id="id001",
+            report_reference="REP-TEST-0002",
+            report_type="Unsafe Act",
+            description="Operator operating open flame heater near leaking gas pipeline in Unit 1.",
+            location="Unit 1",
+            report_date="2026-09-10",
+            analysis_status="COMPLETED"
+        )
+        db.add(rep2)
+        db.commit()
+        db.refresh(rep2)
+        analysis2 = AIAnalysis(
+            report_id=rep2.id,
+            organization_id="id001",
+            identified_hazard="Open Flame & Ignition Source",
+            sif_precursor_assessment="YES",
+            energy_source="Thermal Energy",
+            barrier_information="Hot work permit absent",
+            explanation="Active open flame ignition source operated near gas release."
+        )
+        db.add(analysis2)
+        db.commit()
+
+        org_data_2 = get_weak_signals_for_organization(db, "id001")
+        print("2 Reports - Signals:", len(org_data_2["weak_signals"]), "Clusters:", len(org_data_2["emerging_clusters"]))
+        assert len(org_data_2["emerging_clusters"]) == 1, "Expected 1 emerging risk cluster from 2 interacting reports!"
+        cl = org_data_2["emerging_clusters"][0]
+        assert "Gas" in cl["relationship"] and "Ignition" in cl["relationship"]
+        assert "Fire" in cl["potential_consequence"] or "Explosion" in cl["potential_consequence"]
         
-        # Verify first signal has all required keys
-        s0 = signals[0]
-        for key in ["cluster_detected", "relationship", "potential_consequence", "combined_risk", "correlation_score", "reason", "recommended_action", "source_reports", "progression_steps"]:
-            assert key in s0, f"Missing key in signal: {key}"
-            
-        print(">>> PASS: Organization-wide correlation returned structured clusters with all required keys!")
+        # Verify cluster observations trace strictly to user reports
+        cl_rep_ids = [s["report_id"] for s in cl["signals"]]
+        print("Cluster Signal IDs:", cl_rep_ids)
+        assert "REP-TEST-0001" in cl_rep_ids
+        assert "REP-TEST-0002" in cl_rep_ids
+        assert len(cl["signals"]) == 2
+        print(">>> PASS: 2 Reports correctly form an Emerging Risk Cluster with exact user report IDs and descriptions.")
+
+        # Cleanup test data
+        db.query(AIAnalysis).filter(AIAnalysis.report_id.in_([rep1.id, rep2.id])).delete()
+        db.query(SafetyReport).filter(SafetyReport.id.in_([rep1.id, rep2.id])).delete()
+        db.commit()
+        print(">>> Cleaned up test reports.")
     finally:
         db.close()
 

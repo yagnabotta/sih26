@@ -9,18 +9,18 @@ def analyze_barriers(text: str) -> Dict[str, str]:
     """
     lower_text = text.lower()
 
-    # 1. Missing Barriers
-    if re.search(r'\b(no harness|without harness|missing guard|no guard|no barricade|unbarricaded|without permit|no ptw|no loto|did not lock|without isolation|no tag|no gas test)\b', lower_text):
+    # 1. Missing / Bypassed Barriers
+    if re.search(r'\b(ignored.*heat-rest|without.*guard|no guard|missing guard|without required guard|no harness|without harness|no barricade|unbarricaded|without permit|no ptw|no loto|did not lock|without isolation|no tag|no gas test|ignored.*ppe|without.*ppe|entered.*without authorization)\b', lower_text):
         return {
             "status": "BARRIER_MISSING",
-            "description": "Primary safety barrier or control was missing, omitted, or not deployed during task execution."
+            "description": "Primary safety barrier, PPE control, machine guard, or administrative procedure was missing, omitted, or violated."
         }
     
     # 2. Failed Barriers
-    if re.search(r'\b(snapped|broke|failed|barrier failed|malfunctioned|cracked|gave way|detached|dislodged|faulty)\b', lower_text):
+    if re.search(r'\b(cooling system failed|damaged electrical insulation|damaged insulation|uncontrolled.*pressure|snapped|broke|failed|barrier failed|malfunctioned|cracked|gave way|detached|dislodged|faulty|leak|leaking)\b', lower_text):
         return {
             "status": "BARRIER_FAILED",
-            "description": "A safety barrier or equipment mechanism experienced physical failure, degradation, or operational malfunction."
+            "description": "A safety barrier, cooling system, pressure containment, or physical insulation mechanism experienced failure or degradation."
         }
     
     # 3. Present / Functioning Barriers
@@ -30,7 +30,14 @@ def analyze_barriers(text: str) -> Dict[str, str]:
             "description": "A secondary safety barrier or warning control successfully activated and prevented actual severe contact/harm."
         }
     
-    # 4. Unknown / Insufficient Barrier Data
+    # 4. Specific Contextual Uncertainty (e.g. heat exposure without barrier data)
+    if re.search(r'\b(heat|extreme heat|high temperature)\b', lower_text):
+        return {
+            "status": "BARRIER_INSUFFICIENT_INFO",
+            "description": "Insufficient information regarding heat controls"
+        }
+
+    # 5. General Unknown / Insufficient Barrier Data
     return {
         "status": "BARRIER_INSUFFICIENT_INFO",
         "description": "Insufficient Information"

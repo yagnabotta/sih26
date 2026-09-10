@@ -105,6 +105,7 @@ export default function FullAnalysisModal({ report, onClose }) {
   const hazard = report.identified_hazard || report.hazard || analysis.identified_hazard || 'Hazard Assessment Completed';
   const energy = analysis.energy_source || report.energy_source || report.energySource || 'Identified High-Energy Vector';
   const explanation = report.statement || report.description || report.desc || analysis.explanation || 'AI analysis completed based on industrial safety precursor signals.';
+  const rootCause = report.root_cause || storeRecord?.root_cause || analysis.root_cause || analysis.why_identified?.root_cause;
   const recommendation = editableAction;
 
   // Submission metadata: who submitted at which date from which unit
@@ -457,6 +458,19 @@ export default function FullAnalysisModal({ report, onClose }) {
               </div>
             </div>
           </div>
+
+          {/* Root Cause Analysis */}
+          {rootCause && (
+            <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/90 space-y-1.5 shadow-2xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                Root Cause Analysis
+              </span>
+              <p className="text-xs sm:text-sm text-slate-800 font-bold leading-relaxed">
+                {rootCause}
+              </p>
+            </div>
+          )}
 
           {/* Recommended Action */}
           <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200/90 space-y-1.5 shadow-2xs">

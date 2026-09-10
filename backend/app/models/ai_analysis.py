@@ -27,6 +27,10 @@ class AIAnalysis(Base):
     barrier_information = Column(Text, nullable=True) # BARRIER_PRESENT, BARRIER_MISSING, BARRIER_FAILED, BARRIER_UNKNOWN
     potential_consequence = Column(Text, nullable=True)
     sif_precursor_assessment = Column(String(50), nullable=False) # YES, NO, INSUFFICIENT_INFORMATION
+    sif_status = Column(String(50), nullable=True) # SIF, NON-SIF
+    classification = Column(String(50), nullable=True) # NEAR MISS, UNSAFE ACT, UNSAFE CONDITION
+    root_cause = Column(Text, nullable=True)
+    risk_score = Column(Integer, nullable=True)
     explanation = Column(Text, nullable=False)
     
     created_at = Column(DateTime, default=datetime.utcnow)

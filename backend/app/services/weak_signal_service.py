@@ -193,7 +193,7 @@ def get_baseline_weak_signals() -> List[Dict[str, Any]]:
 def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any]:
     """
     Synthesizes weak signals for the given organization by querying safety reports
-    from the database and executing multi-report correlation.
+    from the database and executing multi-report correlation strictly on actual user reports.
     """
     # 1. Fetch completed reports from DB
     db_reports = db.query(SafetyReport).filter(
@@ -219,19 +219,107 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             "safety_signals": analysis.safety_signals if analysis else []
         })
 
-    # 2. Run signal correlation
+    # Case A: 0 user reports in database -> Clean empty state
+    if len(report_dicts) == 0:
+        summary = {
+            "total_active_signals": 0,
+            "high_risk_precursors": 0,
+            "escalating_patterns": 0,
+            "average_confidence": 0.0,
+            "high_risk_count": 0,
+            "medium_risk_count": 0,
+            "low_risk_count": 0,
+            "total_clusters": 0
+        }
+        return {
+            "summary": summary,
+            "weak_signals": [],
+            "emerging_clusters": []
+        }
+
+    # Case B: Exactly 1 user report -> Single observation signal, NO multi-report cluster
+    if len(report_dicts) == 1:
+        single_eval = evaluate_custom_reports_correlation(report_dicts)
+        r0 = report_dicts[0]
+        ref_id = r0.get("report_reference") or f"REP-{r0.get('id', 1)}"
+        single_sig = {
+            "id": 1,
+            "signal_id": "WS-01",
+            "title": f"{r0.get('location') or 'Operating Area'}: {r0.get('identified_hazard') or single_eval.get('relationship') or 'Safety Observation'}",
+            "category": r0.get("identified_hazard") or "Operational Safety",
+            "cluster_detected": False,  # Explicitly False: NOT a multi-report cluster
+            "is_single_signal": True,
+            "relationship": single_eval.get("relationship", "Single Emerging Safety Signal"),
+            "potential_consequence": single_eval.get("potential_consequence", "Localized Operational Hazard"),
+            "potential_sif_precursor": single_eval.get("potential_consequence", "Localized Operational Hazard"),
+            "combined_risk": single_eval.get("combined_risk", "MEDIUM"),
+            "risk_level": single_eval.get("combined_risk", "MEDIUM").title(),
+            "risk_score": single_eval.get("correlation_score", 70),
+            "correlation_score": single_eval.get("correlation_score", 70),
+            "first_detected_date": str(r0.get("report_date") or date.today()),
+            "source": f"Individual Field Observation ({ref_id})",
+            "connected_signals": [f"{ref_id}: {r0.get('description', '')[:70]}"],
+            "progression_steps": [
+                {"step": "1. Field Observation Logged", "trend": "Identified", "status": r0.get('description', '')[:80]},
+                {"step": "2. Precursor Monitoring", "trend": "Monitoring", "status": "Awaiting secondary co-located signals to evaluate potential compounding interactions"}
+            ],
+            "source_reports": [{
+                "report_id": ref_id,
+                "report_type": r0.get("report_type", "Near Miss"),
+                "date_submitted": str(r0.get("report_date") or date.today()),
+                "short_description": r0.get("description", "")[:100],
+                "unit": r0.get("location") or "Operating Area",
+                "excerpt": r0.get("description", "")
+            }],
+            "signals": single_eval.get("signals", [{
+                "signal_num": 1,
+                "report_id": ref_id,
+                "description": r0.get("description", ""),
+                "individual_risk": single_eval.get("combined_risk", "MEDIUM"),
+                "location": r0.get("location") or "Operating Area",
+                "date": str(r0.get("report_date") or date.today()),
+                "detected_roles": []
+            }]),
+            "review_status": "Under Review",
+            "reviewer_notes": "",
+            "key_learnings": f"Monitor {r0.get('identified_hazard') or 'hazard'} for potential compounding precursors.",
+            "energy_source": r0.get("energy_source") or "Monitored Energy Vector",
+            "barrier_status": r0.get("barrier_information") or "BARRIER MONITORED",
+            "why_identified": single_eval.get("reason") or f"Single field observation logged: {r0.get('description', '')[:80]}",
+            "reason": single_eval.get("reason") or "Single safety observation logged. Insufficient co-occurring reports to form an emerging risk cluster.",
+            "recommended_action": single_eval.get("recommended_action") or f"Inspect {r0.get('location') or 'work area'} and confirm primary barrier controls.",
+            "danger": single_eval.get("danger", "Isolated hazard requiring barrier verification."),
+            "root_cause": single_eval.get("root_cause", "Isolated operational deviation awaiting multi-incident trend.")
+        }
+
+        reviews = db.query(WeakSignalReview).filter(
+            WeakSignalReview.organization_id == org_id,
+            WeakSignalReview.signal_id == "WS-01"
+        ).first()
+        if reviews:
+            single_sig["review_status"] = reviews.status
+            if reviews.reviewer_notes:
+                single_sig["reviewer_notes"] = reviews.reviewer_notes
+
+        return {
+            "summary": {
+                "total_active_signals": 1,
+                "high_risk_precursors": 1 if single_sig["risk_level"] == "High" or single_sig["risk_score"] >= 90 else 0,
+                "escalating_patterns": 1 if single_sig["risk_score"] >= 80 else 0,
+                "average_confidence": float(single_sig["risk_score"]),
+                "high_risk_count": 1 if single_sig["risk_level"] == "High" else 0,
+                "medium_risk_count": 1 if single_sig["risk_level"] == "Medium" else 0,
+                "low_risk_count": 1 if single_sig["risk_level"] == "Low" else 0,
+                "total_clusters": 0
+            },
+            "weak_signals": [single_sig],
+            "emerging_clusters": []
+        }
+
+    # Case C: 2 or more reports -> Perform multi-report correlation strictly on user reports
     correlated = correlate_reports_into_weak_signals(report_dicts)
 
-    # 3. If DB correlation returns fewer than 2 signals (sparse data or starting state), blend with baseline signals
-    if len(correlated) < 2:
-        baseline = get_baseline_weak_signals()
-        # Only add baseline signals that don't duplicate existing correlated titles
-        existing_titles = {ws["title"].lower() for ws in correlated}
-        for b in baseline:
-            if b["title"].lower() not in existing_titles:
-                correlated.append(b)
-
-    # 4. Attach any persisted reviews from weak_signal_reviews table
+    # Attach any persisted reviews from weak_signal_reviews table
     reviews = db.query(WeakSignalReview).filter(WeakSignalReview.organization_id == org_id).all()
     review_map = {rev.signal_id: rev for rev in reviews}
 
@@ -242,26 +330,7 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             if review_map[sid].reviewer_notes:
                 sig["reviewer_notes"] = review_map[sid].reviewer_notes
 
-    # 5. Compute summary KPIs
-    total_active = len(correlated)
-    high_risk = sum(1 for s in correlated if s.get("risk_level") == "High" or (s.get("risk_score") or 0) >= 90)
-    med_risk = sum(1 for s in correlated if s.get("risk_level") == "Medium" and (s.get("risk_score") or 0) < 90)
-    low_risk = sum(1 for s in correlated if s.get("risk_level") == "Low")
-    escalating = sum(1 for s in correlated if (s.get("risk_score") or 0) >= 80)
-    avg_conf = round(sum(s.get("risk_score", 90) for s in correlated) / total_active, 1) if total_active > 0 else 95.8
-
-    summary = {
-        "total_active_signals": total_active,
-        "high_risk_precursors": high_risk,
-        "escalating_patterns": escalating,
-        "average_confidence": avg_conf,
-        "high_risk_count": high_risk,
-        "medium_risk_count": med_risk,
-        "low_risk_count": low_risk,
-        "total_clusters": 0
-    }
-
-    # 6. Extract and format structured Emerging Risk Clusters
+    # Extract and format structured Emerging Risk Clusters
     emerging_clusters = []
     for idx, sig in enumerate(correlated, start=1):
         if not sig.get("cluster_detected", True):
@@ -286,7 +355,6 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             for s_idx, rep in enumerate(source_reps, start=1):
                 rtype = rep.get("report_type", "")
                 r_risk = "MEDIUM" if ("near miss" in rtype.lower() or "unsafe" in rtype.lower()) else "LOW"
-                # If high-risk phrasing present in excerpt, reflect realistic individual risk
                 desc = (rep.get("short_description") or rep.get("excerpt") or "").lower()
                 if "fire" in desc or "leak" in desc or "spark" in desc or "voltage" in desc or "fall" in desc:
                     r_risk = "MEDIUM/HIGH"
@@ -301,34 +369,39 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
                 })
 
         # Calculate time relationship
-        dates = [s.get("date") for s in signals_list if s.get("date")]
-        time_rel = "Active operational window (within 48 hours)"
-        if len(dates) >= 2:
-            try:
-                d1 = datetime.strptime(str(dates[0])[:10], "%Y-%m-%d").date()
-                d2 = datetime.strptime(str(dates[1])[:10], "%Y-%m-%d").date()
-                diff_days = abs((d1 - d2).days)
-                if diff_days == 0:
-                    time_rel = "Concurrent (Same shift / day occurrence)"
-                elif diff_days == 1:
-                    time_rel = "Within 24 hours of each other"
-                else:
-                    time_rel = f"Occurred within {diff_days} days of each other"
-            except Exception:
-                pass
+        time_rel = sig.get("time_relationship")
+        if not time_rel:
+            dates = [s.get("date") for s in signals_list if s.get("date")]
+            time_rel = "Active operational window"
+            if len(dates) >= 2:
+                try:
+                    d1 = datetime.strptime(str(dates[0])[:10], "%Y-%m-%d").date()
+                    d2 = datetime.strptime(str(dates[1])[:10], "%Y-%m-%d").date()
+                    diff_days = abs((d1 - d2).days)
+                    if diff_days == 0:
+                        time_rel = "Concurrent (Same shift / day occurrence)"
+                    elif diff_days == 1:
+                        time_rel = "Within 24 hours of each other"
+                    else:
+                        time_rel = f"Occurred within {diff_days} days of each other"
+                except Exception:
+                    pass
 
-        cluster_loc = "Plant Area"
-        if signals_list and signals_list[0].get("location"):
-            cluster_loc = signals_list[0]["location"]
-        elif source_reps and source_reps[0].get("unit"):
-            cluster_loc = source_reps[0]["unit"]
+        cluster_loc = sig.get("location") or "Plant Area"
+        if not cluster_loc or cluster_loc == "Plant Area":
+            if signals_list and signals_list[0].get("location"):
+                cluster_loc = signals_list[0]["location"]
+            elif source_reps and source_reps[0].get("unit"):
+                cluster_loc = source_reps[0]["unit"]
 
         rel = sig.get("relationship") or sig.get("title") or "Cross-Hazard Interaction"
         consequence = sig.get("potential_consequence") or sig.get("potential_sif_precursor") or "Catastrophic Incident"
         combined_risk = sig.get("combined_risk") or (sig.get("risk_level", "HIGH").upper())
-        score = sig.get("correlation_score") or sig.get("risk_score") or 90
+        score = sig.get("correlation_score") or sig.get("risk_score") or 85
         reason = sig.get("reason") or sig.get("why_identified") or "Multiple co-located hazards interact to create an escalated consequence pathway."
         action = sig.get("recommended_action") or sig.get("key_learnings") or "Immediately inspect/isolate the affected area and enforce primary controls."
+        danger = sig.get("danger") or "Elevated compound risk identified by interaction of multiple hazard vectors."
+        root_cause = sig.get("root_cause") or "Concurrent breakdown or compromise of independent defensive barriers."
         progression = sig.get("progression_steps") or []
 
         risk_levels_summary = ", ".join([f"Signal {s['signal_num']}: {s['individual_risk']}" for s in signals_list])
@@ -346,6 +419,8 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             "correlation_score": score,
             "potential_consequence": consequence,
             "combined_risk": combined_risk,
+            "danger": danger,
+            "root_cause": root_cause,
             "reason": reason,
             "recommended_action": action,
             "progression_steps": progression,
@@ -354,11 +429,80 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             "reviewer_notes": sig.get("reviewer_notes", "")
         })
 
-    summary["total_clusters"] = len(emerging_clusters)
+    # Build display weak signals: include correlated clusters + any unclustered user reports as individual signals
+    clustered_report_ids = set()
+    for cl in emerging_clusters:
+        for s in cl.get("signals", []):
+            clustered_report_ids.add(s.get("report_id"))
+
+    display_weak_signals = list(correlated)
+    sig_counter = len(display_weak_signals) + 1
+    for r in report_dicts:
+        ref_id = r.get("report_reference") or f"REP-{r.get('id', sig_counter)}"
+        if ref_id not in clustered_report_ids:
+            single_eval = evaluate_custom_reports_correlation([r])
+            display_weak_signals.append({
+                "id": sig_counter,
+                "signal_id": f"WS-{sig_counter:02d}",
+                "title": f"{r.get('location') or 'Operating Area'}: {r.get('identified_hazard') or single_eval.get('relationship') or 'Safety Observation'}",
+                "category": r.get("identified_hazard") or "Operational Safety",
+                "cluster_detected": False,
+                "is_single_signal": True,
+                "relationship": single_eval.get("relationship", "Single Emerging Safety Signal"),
+                "potential_consequence": single_eval.get("potential_consequence", "Localized Hazard"),
+                "potential_sif_precursor": single_eval.get("potential_consequence", "Localized Hazard"),
+                "combined_risk": single_eval.get("combined_risk", "MEDIUM"),
+                "risk_level": single_eval.get("combined_risk", "MEDIUM").title(),
+                "risk_score": single_eval.get("correlation_score", 70),
+                "correlation_score": single_eval.get("correlation_score", 70),
+                "first_detected_date": str(r.get("report_date") or date.today()),
+                "source": f"Field Observation ({ref_id})",
+                "connected_signals": [f"{ref_id}: {r.get('description', '')[:70]}"],
+                "progression_steps": [
+                    {"step": "1. Field Observation", "trend": "Identified", "status": r.get('description', '')[:80]}
+                ],
+                "source_reports": [{
+                    "report_id": ref_id,
+                    "report_type": r.get("report_type", "Near Miss"),
+                    "date_submitted": str(r.get("report_date") or date.today()),
+                    "short_description": r.get("description", "")[:100],
+                    "unit": r.get("location") or "Operating Area",
+                    "excerpt": r.get("description", "")
+                }],
+                "signals": single_eval.get("signals", []),
+                "review_status": "Under Review",
+                "reviewer_notes": "",
+                "energy_source": r.get("energy_source") or "Monitored Energy Vector",
+                "barrier_status": r.get("barrier_information") or "BARRIER MONITORED",
+                "why_identified": single_eval.get("reason") or "Isolated safety observation",
+                "reason": single_eval.get("reason") or "Isolated safety observation",
+                "recommended_action": single_eval.get("recommended_action") or f"Inspect {r.get('location') or 'area'}.",
+                "danger": single_eval.get("danger", "Isolated hazard."),
+                "root_cause": single_eval.get("root_cause", "Isolated deviation.")
+            })
+            sig_counter += 1
+
+    total_active = len(display_weak_signals)
+    high_risk = sum(1 for s in display_weak_signals if s.get("risk_level") == "High" or (s.get("risk_score") or 0) >= 90)
+    med_risk = sum(1 for s in display_weak_signals if s.get("risk_level") == "Medium" and (s.get("risk_score") or 0) < 90)
+    low_risk = sum(1 for s in display_weak_signals if s.get("risk_level") == "Low")
+    escalating = sum(1 for s in display_weak_signals if (s.get("risk_score") or 0) >= 80)
+    avg_conf = round(sum(s.get("risk_score", 90) for s in display_weak_signals) / total_active, 1) if total_active > 0 else 0.0
+
+    summary = {
+        "total_active_signals": total_active,
+        "high_risk_precursors": high_risk,
+        "escalating_patterns": escalating,
+        "average_confidence": avg_conf,
+        "high_risk_count": high_risk,
+        "medium_risk_count": med_risk,
+        "low_risk_count": low_risk,
+        "total_clusters": len(emerging_clusters)
+    }
 
     return {
         "summary": summary,
-        "weak_signals": correlated,
+        "weak_signals": display_weak_signals,
         "emerging_clusters": emerging_clusters
     }
 

@@ -1,3 +1,4 @@
+import re
 import logging
 from typing import Dict, List, Optional, Any
 
@@ -81,15 +82,42 @@ def assess_sif_precursor(
             "ml_probabilities": ml_probabilities
         }
 
-    # Evaluate High-Consequence Hazards
-    is_high_energy_hazard = hazard and "slip" not in hazard.lower() and any(key in hazard.lower() for key in [
-        "suspended load", "dropped object", "fall from height", "work at height", "height", "arc flash", 
-        "electrical", "confined space", "hazardous energy", "stored pressure", 
-        "mobile equipment", "vehicle", "rotating machinery", "entanglement", "fire", "thermal", "chemical"
-    ])
+    lower_t = text.lower()
+    
+    # Evaluate High-Consequence Hazards (SIF Pathways)
+    # Note: Ordinary ambient heat is NOT high-energy SIF unless accompanied by life-threatening indicators (heat stroke, hospitalization)
+    is_severe_heat = bool(re.search(r'\b(life-threatening|heat stroke|hospitaliz|critical condition|loss of consciousness|unconscious)\b', lower_t))
+    is_fire_explosion = bool(re.search(r'\b(fire|flame|explosion|blast|welding spark|arc flash|flash fire|boiler|molten)\b', lower_t))
+    
+    is_high_energy_hazard = False
+    if hazard:
+        h_low = hazard.lower()
+        if "slip" in h_low or "housekeeping" in h_low:
+            is_high_energy_hazard = False
+        elif "heat exposure" in h_low or "thermal environmental" in h_low or "hot surface" in h_low:
+            # Heat is SIF only if severe life-threatening heat stroke / hospitalization or open fire
+            is_high_energy_hazard = is_severe_heat or is_fire_explosion
+        elif any(key in h_low for key in [
+            "suspended load", "dropped object", "fall from height", "work at height", 
+            "electrical", "live conductor", "energized", "confined space", "toxic gas", 
+            "stored pressure", "pressure release", "pressurized", "mobile equipment", 
+            "vehicle", "rotating machinery", "entanglement", "chemical"
+        ]):
+            is_high_energy_hazard = True
 
-    has_active_exposure = exposure is not None or len(signals) > 0
+    # Check direct text cues for high-energy SIF pathways even if hazard string was generic
+    if any(re.search(p, lower_t) for p in [
+        r'\b(uncontrolled.*pressure|high-pressure release|blowout|rupture)\b',
+        r'\b(struck by.*vehicle|moving vehicle|crushed by vehicle)\b',
+        r'\b(live conductor|energized conductor|contact with live|high voltage|11kv|415v|arc flash)\b',
+        r'\b(suspended load|crane.*load|dropped.*height|fall from height|scaffold.*fall)\b',
+        r'\b(machinery without.*guard|operated machinery without.*guard|amputation|entrapment)\b'
+    ]):
+        is_high_energy_hazard = True
+
+    has_active_exposure = exposure is not None and exposure != "Insufficient Information"
     has_barrier_gap = barrier_status in ["BARRIER_MISSING", "BARRIER_FAILED"]
+    has_serious_injury = bool(re.search(r'\b(serious injury|severe injury|heat stroke|hospitaliz|amputation|crush|critical)\b', lower_t))
 
     # Determine Potential Consequence
     potential_consequence = None
@@ -100,67 +128,62 @@ def assess_sif_precursor(
             potential_consequence = "Potential severe deceleration injury, spinal trauma, or fatality due to fall from height."
         elif "Slip" in hazard or "Trip" in hazard:
             potential_consequence = "Potential low-severity slip or minor contusion."
-        elif "Electrical" in hazard or "Arc Flash" in hazard:
+        elif "Electrical" in hazard or "Arc Flash" in hazard or "Live Conductor" in hazard:
             potential_consequence = "Potential high-voltage electrical shock, severe arc flash thermal burns, or electrocution."
         elif "Confined Space" in hazard or "Toxic Gas" in hazard:
             potential_consequence = "Potential asphyxiation, toxic inhalation incapacitation, or atmospheric explosion."
-        elif "Hazardous Energy" in hazard or "Stored Pressure" in hazard:
+        elif "Stored Pressure" in hazard or "Pressurized" in hazard or "Pressure Release" in hazard:
             potential_consequence = "Potential high-pressure fluid injection, line blowout impact, or mechanical strike."
         elif "Mobile Equipment" in hazard or "Vehicle" in hazard:
             potential_consequence = "Potential runover, crush entrapment, or severe struck-by impact by heavy industrial vehicle."
         elif "Rotating Machinery" in hazard or "Entanglement" in hazard:
             potential_consequence = "Potential limb entanglement, traumatic amputation, or severe mechanical entrapment."
-        elif "Fire" in hazard or "Thermal" in hazard:
+        elif "Fire" in hazard:
             potential_consequence = "Potential severe thermal burns, smoke inhalation, or rapid structural fire escalation."
+        elif "Heat" in hazard:
+            potential_consequence = "Potential heat exhaustion, dehydration, or localized heat rash." if not is_severe_heat else "Severe life-threatening heat stroke and organ failure."
         elif "Chemical" in hazard:
             potential_consequence = "Potential acute chemical burns, corrosive systemic exposure, or hazardous plume inhalation."
         else:
-            potential_consequence = "Potential minor to moderate localized impact or low-severity first-aid injury."
+            potential_consequence = "Potential localized impact or operational safety deviation."
     else:
         potential_consequence = "Not identified from the available report information."
 
     # SIF Precursor Decision Logic
-    # YES: High-energy hazard + personnel exposure/safety signals + compromised or missing barrier
-    if is_high_energy_hazard and (has_active_exposure or barrier_status in ["BARRIER_MISSING", "BARRIER_FAILED"]):
+    # 1. High energy hazard with active exposure, barrier failure, serious injury, or critical near-miss contact
+    if is_high_energy_hazard:
+        # Near miss with energized conductor or high energy -> SIF precursor (PSIF)
         return {
             "assessment": "YES",
+            "sif_status": "SIF",
             "potential_consequence": potential_consequence,
-            "reason": "Report indicates a combination of significant hazardous energy, personnel exposure, and absent or compromised barriers.",
+            "reason": "Report indicates a combination of significant hazardous energy, personnel exposure, and absent or compromised barriers with serious consequence potential.",
             "ml_sif_prediction": ml_sif_prediction,
             "ml_sif_confidence": ml_sif_confidence,
             "ml_model": ml_model,
             "ml_probabilities": ml_probabilities
         }
     
-    # If it's a slip/fall or minor housekeeping event without high-energy or severe exposure
-    if hazard and ("Slip / Fall" in hazard or "Slip, Trip, or Surface Housekeeping" in hazard) and not is_high_energy_hazard:
+    # 2. Slip / Trip or Minor Surface Event -> NON-SIF
+    if hazard and ("Slip" in hazard or "Trip" in hazard):
         return {
             "assessment": "NO",
+            "sif_status": "NON-SIF",
             "potential_consequence": potential_consequence or "Low-severity slip or minor contusion.",
-            "reason": "Classified as Non-SIF because the report indicates a slip/fall hazard but does not provide evidence of high-energy exposure, significant worker exposure, or a barrier deficiency.",
+            "reason": "Classified as Non-SIF because the report indicates a slip/fall hazard on a level surface without high-energy exposure, elevated fall, or life-threatening consequence pathways.",
             "ml_sif_prediction": ml_sif_prediction,
             "ml_sif_confidence": ml_sif_confidence,
             "ml_model": ml_model,
             "ml_probabilities": ml_probabilities
         }
 
-    # If signals are present or high hazard present without confirmed exposure:
-    if is_high_energy_hazard and not has_active_exposure and barrier_status == "BARRIER_PRESENT":
+    # 3. Heat exposure without life-threatening criteria -> NON-SIF
+    if hazard and ("Heat" in hazard or "Thermal" in hazard) and not is_severe_heat and not is_fire_explosion:
         return {
             "assessment": "NO",
-            "potential_consequence": potential_consequence,
-            "reason": "While a hazardous energy source was present, active safety barriers successfully mitigated worker exposure.",
-            "ml_sif_prediction": ml_sif_prediction,
-            "ml_sif_confidence": ml_sif_confidence,
-            "ml_model": ml_model,
-            "ml_probabilities": ml_probabilities
-        }
-
-    if is_high_energy_hazard:
-        return {
-            "assessment": "YES",
-            "potential_consequence": potential_consequence,
-            "reason": "Identified high-energy hazard with potential unmitigated exposure pathways based on available information.",
+            "sif_status": "NON-SIF",
+            "potential_consequence": potential_consequence or "Potential heat stress or localized fatigue.",
+            "reason": "The report describes heat exposure, but no high-energy release, fire, or life-threatening SIF pathway (such as emergency heat stroke hospitalization) is established from available information.",
             "ml_sif_prediction": ml_sif_prediction,
             "ml_sif_confidence": ml_sif_confidence,
             "ml_model": ml_model,
@@ -169,8 +192,9 @@ def assess_sif_precursor(
 
     return {
         "assessment": "NO",
+        "sif_status": "NON-SIF",
         "potential_consequence": potential_consequence or "Not identified from the available report information.",
-        "reason": "Available information does not indicate high-energy exposure or potential serious consequence precursors.",
+        "reason": "Available information does not indicate high-energy exposure or credible serious injury and fatality precursors.",
         "ml_sif_prediction": ml_sif_prediction,
         "ml_sif_confidence": ml_sif_confidence,
         "ml_model": ml_model,
