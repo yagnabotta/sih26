@@ -364,6 +364,13 @@ export default function MobileSafetyApp() {
   const [reworkReason, setReworkReason] = useState('');
   const [showReworkInput, setShowReworkInput] = useState(false);
   const [actionNotice, setActionNotice] = useState(null);
+  const [hasReadAlerts, setHasReadAlerts] = useState(false);
+
+  // User's own report IDs for alerting (empty until responder platform is integrated)
+  const userReportIds = new Set(reportedIncidents.map(r => r.id));
+  const userAcceptedAlerts = tasks.filter(t => 
+    (t.report_id && userReportIds.has(t.report_id)) && (t.status === 'ACCEPTED' || t.status === 'VERIFIED')
+  );
 
   // SOS Emergency State
   const [sosCountdown, setSosCountdown] = useState(null);
@@ -1635,14 +1642,17 @@ export default function MobileSafetyApp() {
 
                 <div className="flex items-center gap-1">
                   <button 
-                    onClick={() => setActiveTab('alerts')}
+                    onClick={() => {
+                      setActiveTab('alerts');
+                      setHasReadAlerts(true);
+                    }}
                     aria-label="View notifications"
-                    className="relative p-2 rounded-full hover:bg-slate-50 transition-colors"
+                    className="relative p-2 rounded-full hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     <Bell className="w-5 h-5 text-slate-700" />
-                    {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length > 0 && (
+                    {!hasReadAlerts && userAcceptedAlerts.length > 0 && (
                       <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white font-bold text-[9px] rounded-full flex items-center justify-center border-2 border-white shadow-xs">
-                        {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length}
+                        {userAcceptedAlerts.length}
                       </span>
                     )}
                   </button>
@@ -2102,18 +2112,16 @@ export default function MobileSafetyApp() {
                         Live acceptance & response updates from dispatched departments
                       </p>
                     </div>
-                    {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length > 0 && (
+                    {userAcceptedAlerts.length > 0 && (
                       <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 font-mono">
-                        {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length} Accepted
+                        {userAcceptedAlerts.length} Accepted
                       </span>
                     )}
                   </div>
 
-                  {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length > 0 ? (
+                  {userAcceptedAlerts.length > 0 ? (
                     <div className="space-y-2.5">
-                      {tasks
-                        .filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED')
-                        .map(task => (
+                      {userAcceptedAlerts.map(task => (
                           <div
                             key={task.id}
                             className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-2xs space-y-2"
@@ -3268,12 +3276,22 @@ export default function MobileSafetyApp() {
               </div>
 
               <button
-                onClick={() => setActiveTab('alerts')}
-                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all ${
+                onClick={() => {
+                  setActiveTab('alerts');
+                  setHasReadAlerts(true);
+                }}
+                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
                   activeTab === 'alerts' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
-                <Bell className="w-5 h-5 stroke-[2.2]" />
+                <div className="relative">
+                  <Bell className="w-5 h-5 stroke-[2.2]" />
+                  {!hasReadAlerts && userAcceptedAlerts.length > 0 && (
+                    <span className="absolute -top-1 -right-1.5 w-3.5 h-3.5 bg-red-500 text-white font-bold text-[8px] rounded-full flex items-center justify-center border border-white">
+                      {userAcceptedAlerts.length}
+                    </span>
+                  )}
+                </div>
                 <span className="text-[10px] mt-1 font-medium">Alerts</span>
               </button>
 
