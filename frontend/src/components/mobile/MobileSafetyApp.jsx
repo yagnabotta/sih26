@@ -164,6 +164,108 @@ function extractAiIncidentDetails(text, category) {
   return { energyVector, lifeSavingRule, recommendedAction, dept, deptLabel };
 }
 
+const DEFAULT_USER_INCIDENTS = [
+  {
+    id: 101,
+    report_number: 'REP-ID001-9821',
+    report_name: 'Hydrocarbon Leak Near Flare Line',
+    title: 'Hydrocarbon Leak: Unit 4 (Flare)',
+    description: 'Pressurized gas venting observed with unusual hissing sound near isolation flange. Combustible gas detector triggered.',
+    category: 'Hazard',
+    report_type: 'Hazard',
+    location: 'Unit 4',
+    facility_unit: 'Unit 4 (Flare)',
+    incidentLocation: {
+      latitude: 12.9725,
+      longitude: 77.5955,
+      name: 'Unit 4 (Flare)',
+      address: 'Unit 4 Flare Header & Knockout Drum, South Sector'
+    },
+    reported_by: 'Liam Vance (Field Worker)',
+    severity: 'CRITICAL',
+    risk_level: 'Critical',
+    sif_precursor_assessment: 'YES',
+    status: 'Action Required',
+    is_sif: true,
+    risk_score: 94,
+    energy_vector: 'Pressure & Flammable Hydrocarbon',
+    life_saving_rule: 'Bypass of Safety Controls & Hot Work',
+    barrier_status: 'CRITICAL BARRIER FAILED / MISSING',
+    recommended_action: 'Depressurize header, cordon 50m exclusion boundary, verify LOTO and dispatch emergency mechanical response.',
+    reasoning: 'High-pressure flammable gas release in vicinity of ignition sources constitutes an unmitigated Life-Threatening SIF Precursor.',
+    assigned_department: 'MECHANICAL',
+    assigned_department_label: 'Mechanical & Piping',
+    photo_attached: true,
+    created_at: new Date(Date.now() - 25 * 60 * 1000).toISOString()
+  },
+  {
+    id: 102,
+    report_number: 'REP-ID001-8742',
+    report_name: 'Missing Scaffolding Toe-Boards at High Elevation',
+    title: 'Unsafe Condition: Unit 2 (FCC)',
+    description: 'Scaffold platform at 18 meters missing toe-boards and mid-rail on western side. Heavy tools placed near open edge over active walkway.',
+    category: 'Unsafe Condition',
+    report_type: 'Unsafe Condition',
+    location: 'Unit 2',
+    facility_unit: 'Unit 2 (FCC)',
+    incidentLocation: {
+      latitude: 12.9710,
+      longitude: 77.5940,
+      name: 'Unit 2 (FCC)',
+      address: 'Unit 2 FCC Reactor Column, Level 3 Scaffolding'
+    },
+    reported_by: 'Liam Vance (Field Worker)',
+    severity: 'CRITICAL',
+    risk_level: 'Critical',
+    sif_precursor_assessment: 'YES',
+    status: 'Action Required',
+    is_sif: true,
+    risk_score: 91,
+    energy_vector: 'Gravity / Fall from Height',
+    life_saving_rule: 'Working at Height',
+    barrier_status: 'BARRIER DEGRADED / INCOMPLETE',
+    recommended_action: 'Red-tag scaffolding immediately, stop work at height, install certified toe-boards and secondary tool lanyards.',
+    reasoning: 'Fall from 18m or dropped object impact from this elevation has lethal energy vector with direct SIF potential.',
+    assigned_department: 'SAFETY',
+    assigned_department_label: 'Safety Inspection Team',
+    photo_attached: false,
+    created_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString()
+  },
+  {
+    id: 103,
+    report_number: 'REP-ID001-6519',
+    report_name: 'Improper Cable Routing in Control Corridor',
+    title: 'Near Miss: Unit 1 (CDU)',
+    description: 'Temporary 415V supply cable routed across walkway without rubber cable protector ramps. Worker tripped but avoided falling.',
+    category: 'Near Miss',
+    report_type: 'Near Miss',
+    location: 'Unit 1',
+    facility_unit: 'Unit 1 (CDU)',
+    incidentLocation: {
+      latitude: 12.9716,
+      longitude: 77.5946,
+      name: 'Unit 1 (CDU)',
+      address: 'Unit 1 Crude Distillation Control Corridor'
+    },
+    reported_by: 'Liam Vance (Field Worker)',
+    severity: 'MEDIUM',
+    risk_level: 'Medium',
+    sif_precursor_assessment: 'NO',
+    status: 'Under Review',
+    is_sif: false,
+    risk_score: 48,
+    energy_vector: 'Low-Voltage Electrical & Trip Hazard',
+    life_saving_rule: 'Energy Isolation & Walkway Integrity',
+    barrier_status: 'BARRIER TEMPORARILY COMPROMISED',
+    recommended_action: 'Re-route cabling overhead through cable tray and install high-visibility heavy duty ramp protectors.',
+    reasoning: 'Low kinetic energy trip incident without high-voltage arc hazard. Classified as controlled non-SIF operational observation.',
+    assigned_department: 'ELECTRICAL',
+    assigned_department_label: 'Electrical Maintenance',
+    photo_attached: false,
+    created_at: new Date(Date.now() - 5 * 3600 * 1000).toISOString()
+  }
+];
+
 export default function MobileSafetyApp() {
   // Screen Mode: 'welcome' (Splash Onboarding) | 'login' (Role & Auth) | 'app' (Main Dashboard)
   const [screenMode, setScreenMode] = useState('welcome');
@@ -223,6 +325,18 @@ export default function MobileSafetyApp() {
   const [selectedIncidentLocation, setSelectedIncidentLocation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
+
+  // User Reported Incidents & Location Viewer State
+  const [reportedIncidents, setReportedIncidents] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('safetyai_active_reports') || '[]');
+      if (stored && Array.isArray(stored) && stored.length > 0) return stored;
+    } catch (e) {}
+    return DEFAULT_USER_INCIDENTS;
+  });
+  const [locationViewIncident, setLocationViewIncident] = useState(null);
+  const [incidentFilter, setIncidentFilter] = useState('ALL'); // 'ALL' | 'SIF' | 'CONTROLLED'
+  const [incidentsViewMode, setIncidentsViewMode] = useState('REPORTS'); // 'REPORTS' | 'TASKS'
 
   // Response Tasks & Overview Metrics
   const [tasks, setTasks] = useState([]);
@@ -923,6 +1037,7 @@ export default function MobileSafetyApp() {
         const stored = JSON.parse(localStorage.getItem('safetyai_active_reports') || '[]');
         localStorage.setItem('safetyai_active_reports', JSON.stringify([newRecord, ...stored]));
       } catch (e) {}
+      setReportedIncidents(prev => [newRecord, ...prev]);
 
       // 3. Increment KPI metrics
       setKpis(prev => ({
@@ -1628,145 +1743,344 @@ export default function MobileSafetyApp() {
                     </div>
                   </div>
 
+                  {/* RECENT REPORTED INCIDENTS ON USER DASHBOARD */}
+                  <div className="space-y-3 pt-1">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-1.5">
+                        <FileText className="w-4 h-4 text-blue-600" />
+                        <span>Recent Reported Incidents</span>
+                      </h2>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('incidents')}
+                        className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <span>View All ({reportedIncidents.length})</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      {reportedIncidents.slice(0, 3).map(report => (
+                        <div
+                          key={report.id || report.report_number}
+                          className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-2xs space-y-2.5 hover:shadow-sm transition-all"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                                  {report.report_number || 'REP-ID001'}
+                                </span>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                  report.is_sif ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
+                                }`}>
+                                  {report.is_sif ? '🚨 SIF Precursor' : '✅ Controlled'}
+                                </span>
+                              </div>
+                              <h3 className="text-xs font-bold text-slate-900 mt-1 leading-snug truncate">
+                                {report.title || report.report_name}
+                              </h3>
+                            </div>
+
+                            <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black border font-mono shrink-0 ${
+                              report.is_sif ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            }`}>
+                              Score: {report.risk_score || 75}/100
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed bg-slate-50/70 p-2 rounded-xl border border-slate-100">
+                            {report.description}
+                          </p>
+
+                          <div className="flex items-center justify-between text-[11px] text-slate-500">
+                            <span className="flex items-center gap-1 truncate text-[10px] font-medium">
+                              <MapPin className="w-3 h-3 text-blue-600 shrink-0" />
+                              <span className="truncate">{report.incidentLocation?.address || report.facility_unit || report.location}</span>
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                              {report.created_at ? new Date(report.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => setAiAnalysisModalData(report)}
+                              className="py-2 px-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-xs cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                              <span>View Details</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setLocationViewIncident(report)}
+                              className="py-2 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[11px] flex items-center justify-center gap-1.5 border border-slate-200 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <MapPin className="w-3.5 h-3.5 text-blue-600" />
+                              <span>View Location</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                 </div>
               )}
 
-              {/* TAB: INCIDENTS & ACTIONS PENDING */}
+              {/* TAB: INCIDENTS (USER REPORTED INCIDENTS & SIF PRECURSORS) */}
               {activeTab === 'incidents' && (
                 <div className="space-y-4 animate-fadeIn">
                   
+                  {/* Header */}
                   <div className="flex items-center justify-between">
                     <div>
-                      <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                        Incidents & Actions
+                      <h2 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-1.5">
+                        <FileText className="w-4 h-4 text-blue-600" />
+                        <span>Reported Incidents</span>
                       </h2>
                       <p className="text-xs text-slate-500">
-                        Department dispatch & verification loop
+                        AI Analyzed SIF Precursor Records ({reportedIncidents.length})
                       </p>
                     </div>
                     <button
-                      onClick={fetchTasks}
-                      className="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs shadow-2xs"
+                      onClick={() => {
+                        try {
+                          const stored = JSON.parse(localStorage.getItem('safetyai_active_reports') || '[]');
+                          if (stored && Array.isArray(stored) && stored.length > 0) {
+                            setReportedIncidents(stored);
+                          }
+                        } catch (e) {}
+                      }}
+                      className="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs shadow-2xs cursor-pointer"
+                      title="Refresh Records"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  {/* Department Scroller */}
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
-                    {DEPARTMENTS.map(dept => (
+                  {/* Role Switcher if Responder */}
+                  {currentUser?.role === 'RESPONDER' && (
+                    <div className="p-1 rounded-xl bg-slate-100 flex items-center gap-1">
                       <button
-                        key={dept.id}
-                        onClick={() => setSelectedDept(dept.id)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 border transition-all ${
-                          selectedDept === dept.id
-                            ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        type="button"
+                        onClick={() => setIncidentsViewMode('REPORTS')}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          incidentsViewMode === 'REPORTS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                         }`}
                       >
-                        {dept.name}
+                        📋 Incident Reports
                       </button>
-                    ))}
-                  </div>
+                      <button
+                        type="button"
+                        onClick={() => setIncidentsViewMode('TASKS')}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          incidentsViewMode === 'TASKS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
+                        }`}
+                      >
+                        ⚡ Response Tasks ({tasks.length})
+                      </button>
+                    </div>
+                  )}
 
-                  {/* Task Feed */}
-                  <div className="space-y-3">
-                    {tasks.map(task => {
-                      const isClaimed = task.status === 'ACCEPTED' || task.status === 'SUBMITTED_FOR_VERIFICATION' || task.status === 'VERIFIED';
-                      const isVerified = task.status === 'VERIFIED';
-                      const isPending = task.status === 'SUBMITTED_FOR_VERIFICATION';
+                  {/* INCIDENTS VIEW: REPORTED INCIDENTS */}
+                  {incidentsViewMode === 'REPORTS' ? (
+                    <>
+                      {/* Filter Chips: All | High SIF | Controlled */}
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+                        {[
+                          { id: 'ALL', label: `All Reports (${reportedIncidents.length})` },
+                          { id: 'SIF', label: `🚨 High SIF (${reportedIncidents.filter(r => r.is_sif).length})` },
+                          { id: 'CONTROLLED', label: `✅ Controlled (${reportedIncidents.filter(r => !r.is_sif).length})` }
+                        ].map(chip => (
+                          <button
+                            key={chip.id}
+                            type="button"
+                            onClick={() => setIncidentFilter(chip.id)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 border transition-all cursor-pointer ${
+                              incidentFilter === chip.id
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            {chip.label}
+                          </button>
+                        ))}
+                      </div>
 
-                      return (
-                        <div
-                          key={task.id}
-                          className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs space-y-2.5 hover:shadow-sm transition-all"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-xs font-mono font-bold text-blue-600">
-                                  #{task.id}
-                                </span>
-                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold text-slate-600 uppercase">
-                                  {task.department.replace('_', ' ')}
-                                </span>
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                  task.priority === 'CRITICAL' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
-                                }`}>
-                                  {task.priority}
+                      {/* Incident Cards Feed */}
+                      <div className="space-y-3">
+                        {reportedIncidents
+                          .filter(r => {
+                            if (incidentFilter === 'SIF') return r.is_sif;
+                            if (incidentFilter === 'CONTROLLED') return !r.is_sif;
+                            return true;
+                          })
+                          .map(report => (
+                            <div
+                              key={report.id || report.report_number}
+                              className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-2xs space-y-3 hover:shadow-sm transition-all"
+                            >
+                              {/* Top Row: Main Name & SIF Score */}
+                              <div className="flex items-start justify-between gap-2.5">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                                      {report.report_number || 'REP-ID001'}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded uppercase">
+                                      {report.category || report.report_type || 'Near Miss'}
+                                    </span>
+                                  </div>
+                                  {/* Main Name */}
+                                  <h3 className="text-sm font-bold text-slate-900 mt-1 leading-snug">
+                                    {report.title || report.report_name}
+                                  </h3>
+                                </div>
+
+                                {/* SIF Score Badge */}
+                                <div className="shrink-0 text-right">
+                                  <div className={`px-2.5 py-1 rounded-xl text-[10px] font-black tracking-wide border flex items-center gap-1 shadow-2xs ${
+                                    report.is_sif
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  }`}>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${report.is_sif ? 'bg-rose-600 animate-pulse' : 'bg-emerald-500'}`} />
+                                    <span>SIF Score: {report.risk_score || 75}/100</span>
+                                  </div>
+                                  <span className="text-[9px] font-bold text-slate-400 mt-0.5 block">
+                                    {report.is_sif ? 'Critical Precursor' : 'Controlled'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Description Preview */}
+                              <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed bg-slate-50/70 p-2.5 rounded-xl border border-slate-100">
+                                {report.description}
+                              </p>
+
+                              {/* Location & Metadata Row */}
+                              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                                <div className="flex items-center gap-1 truncate font-medium">
+                                  <MapPin className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                  <span className="truncate">
+                                    {report.incidentLocation?.address || report.facility_unit || report.location || 'Unit 1'}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[10px] text-slate-400 shrink-0 ml-2">
+                                  {report.created_at ? new Date(report.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today'}
                                 </span>
                               </div>
-                              <h3 className="text-xs font-bold text-slate-900 mt-1">
-                                {task.title}
-                              </h3>
+
+                              {/* Two Action Buttons: View Details & View Location */}
+                              <div className="pt-1 grid grid-cols-2 gap-2 border-t border-slate-100">
+                                <button
+                                  type="button"
+                                  onClick={() => setAiAnalysisModalData(report)}
+                                  className="py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-all"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                                  <span>View Details</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setLocationViewIncident(report)}
+                                  className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-200 cursor-pointer transition-all"
+                                >
+                                  <MapPin className="w-3.5 h-3.5 text-blue-600" />
+                                  <span>View Location</span>
+                                </button>
+                              </div>
+
                             </div>
+                          ))}
+                      </div>
+                    </>
+                  ) : (
+                    /* RESPONDER TASKS VIEW (when toggled by Responder role) */
+                    <div className="space-y-3">
+                      {tasks.map(task => {
+                        const isClaimed = task.status === 'ACCEPTED' || task.status === 'SUBMITTED_FOR_VERIFICATION' || task.status === 'VERIFIED';
+                        const isVerified = task.status === 'VERIFIED';
+                        const isPending = task.status === 'SUBMITTED_FOR_VERIFICATION';
 
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
-                              isVerified ? 'bg-emerald-50 text-emerald-700' :
-                              isPending ? 'bg-purple-50 text-purple-700' :
-                              isClaimed ? 'bg-blue-50 text-blue-700' :
-                              'bg-amber-50 text-amber-700'
-                            }`}>
-                              {task.status.replace(/_/g, ' ')}
-                            </span>
-                          </div>
-
-                          <p className="text-xs text-slate-600 leading-relaxed">
-                            {task.description}
-                          </p>
-
-                          <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
-                            <span>{task.assigned_to_name ? `Claimed by: ${task.assigned_to_name}` : 'Unclaimed'}</span>
-                            <span className="font-mono">{new Date(task.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-
-                          {/* Action Buttons */}
-                          <div className="pt-1 flex items-center gap-2">
-                            {task.status === 'ASSIGNED' && (
-                              <button
-                                onClick={() => handleClaimTask(task.id)}
-                                className="flex-1 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs"
-                              >
-                                <Lock className="w-3.5 h-3.5" />
-                                <span>Claim Task 🔒</span>
-                              </button>
-                            )}
-
-                            {(task.status === 'ACCEPTED' || task.status === 'REWORK_REQUESTED') && (
-                              <button
-                                onClick={() => setSelectedTaskModal(task)}
-                                className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs"
-                              >
-                                <Camera className="w-3.5 h-3.5" />
-                                <span>Submit Evidence 📸</span>
-                              </button>
-                            )}
-
-                            {isPending && (
-                              <div className="w-full flex items-center gap-2">
-                                <button
-                                  onClick={() => handleVerifyTask(task.id, 'APPROVE')}
-                                  className="flex-1 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs"
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setSelectedTaskModal(task);
-                                    setShowReworkInput(true);
-                                  }}
-                                  className="flex-1 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200 font-bold text-xs"
-                                >
-                                  Request Rework
-                                </button>
+                        return (
+                          <div
+                            key={task.id}
+                            className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs space-y-2.5 hover:shadow-sm transition-all"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs font-mono font-bold text-blue-600">#{task.id}</span>
+                                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold text-slate-600 uppercase">
+                                    {task.department.replace('_', ' ')}
+                                  </span>
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    task.priority === 'CRITICAL' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
+                                  }`}>
+                                    {task.priority}
+                                  </span>
+                                </div>
+                                <h3 className="text-xs font-bold text-slate-900 mt-1">{task.title}</h3>
                               </div>
-                            )}
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
+                                isVerified ? 'bg-emerald-50 text-emerald-700' :
+                                isPending ? 'bg-purple-50 text-purple-700' :
+                                isClaimed ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+                              }`}>
+                                {task.status.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 leading-relaxed">{task.description}</p>
+                            <div className="pt-1 flex items-center gap-2">
+                              {task.status === 'ASSIGNED' && (
+                                <button
+                                  onClick={() => handleClaimTask(task.id)}
+                                  className="flex-1 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs"
+                                >
+                                  <Lock className="w-3.5 h-3.5" />
+                                  <span>Claim Task 🔒</span>
+                                </button>
+                              )}
+                              {(task.status === 'ACCEPTED' || task.status === 'REWORK_REQUESTED') && (
+                                <button
+                                  onClick={() => setSelectedTaskModal(task)}
+                                  className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <span>Submit Evidence 📸</span>
+                                </button>
+                              )}
+                              {isPending && (
+                                <div className="w-full flex items-center gap-2">
+                                  <button
+                                    onClick={() => handleVerifyTask(task.id, 'APPROVE')}
+                                    className="flex-1 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedTaskModal(task);
+                                      setShowReworkInput(true);
+                                    }}
+                                    className="flex-1 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200 font-bold text-xs"
+                                  >
+                                    Request Rework
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
-
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                 </div>
               )}
@@ -2463,6 +2777,102 @@ export default function MobileSafetyApp() {
                       className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
                     >
                       Done / Return to Dashboard
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* INCIDENT MAP LOCATION MODAL */}
+            {locationViewIncident && (
+              <div className="absolute inset-0 bg-black/65 backdrop-blur-xs z-50 flex flex-col justify-end animate-fadeIn">
+                <div className="bg-white rounded-t-[32px] p-5 space-y-3.5 max-h-[92%] overflow-y-auto custom-scrollbar shadow-2xl">
+                  
+                  {/* Modal Header */}
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-sky-500 flex items-center justify-center text-white shadow-sm shadow-blue-500/30">
+                        <MapPin className="w-5 h-5 text-white" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black text-blue-600 tracking-wider uppercase block">
+                          Incident Map Location
+                        </span>
+                        <h3 className="text-sm font-bold text-slate-900 leading-tight">
+                          {locationViewIncident.title || locationViewIncident.report_name}
+                        </h3>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLocationViewIncident(null)}
+                      className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Location Info Banner */}
+                  <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                        Facility Unit & Address
+                      </span>
+                      <span className="text-xs font-bold text-slate-900">
+                        {locationViewIncident.incidentLocation?.address || locationViewIncident.facility_unit || locationViewIncident.location}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        locationViewIncident.is_sif ? 'bg-rose-100 text-rose-700 font-mono' : 'bg-emerald-100 text-emerald-700 font-mono'
+                      }`}>
+                        SIF: {locationViewIncident.risk_score || 75}/100
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Plant Site Map & Sector Pin */}
+                  <div className="space-y-1.5 pt-1">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-blue-600" /> Interactive Site Location & Exclusion Zone
+                    </span>
+                    <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-2xs">
+                      <IncidentPostAnalysisMap
+                        incidentLocation={locationViewIncident.incidentLocation || {
+                          latitude: locationViewIncident.incident_latitude || 12.9716,
+                          longitude: locationViewIncident.incident_longitude || 77.5946,
+                          name: locationViewIncident.facility_unit || locationViewIncident.location || 'Unit 1',
+                          address: locationViewIncident.incident_address || locationViewIncident.facility_unit || locationViewIncident.location || 'Unit 1'
+                        }}
+                        riskScore={locationViewIncident.risk_score || 75}
+                        riskLevel={locationViewIncident.is_sif ? 'High Risk' : 'Medium Risk'}
+                        incidentType={locationViewIncident.category || locationViewIncident.report_type || 'Near Miss'}
+                        reportName={locationViewIncident.title || locationViewIncident.report_name}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Bottom Actions */}
+                  <div className="space-y-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const inc = locationViewIncident;
+                        setLocationViewIncident(null);
+                        setAiAnalysisModalData(inc);
+                      }}
+                      className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold text-xs tracking-wide shadow-md shadow-blue-600/30 flex items-center justify-center gap-2 cursor-pointer transition-all"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      <span>View Full AI Analysis Details</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLocationViewIncident(null)}
+                      className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
+                    >
+                      Close Map View
                     </button>
                   </div>
 
