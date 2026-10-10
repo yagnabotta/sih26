@@ -92,7 +92,7 @@ export default function IncidentPostAnalysisMap({
             📍 INCIDENT SITE
           </div>
           <span style="background: ${hexColor}; color: white; padding: 2px 8px; border-radius: 6px; font-weight: 900; font-size: 11px; font-family: monospace;">
-            SCORE: ${riskScore}
+            ${badgeText}
           </span>
         </div>
         <div style="font-size: 12px; line-height: 1.6; color: #334155;">
@@ -158,7 +158,7 @@ export default function IncidentPostAnalysisMap({
                 INCIDENT LOCATION MAP
               </span>
               <span className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-black uppercase border ${markerColorClass}`}>
-                {badgeText} ({riskScore}/100)
+                {badgeText}
               </span>
             </div>
             <span className="text-[11px] font-medium text-slate-500 block truncate max-w-sm">

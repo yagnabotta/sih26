@@ -1954,49 +1954,14 @@ export default function MobileSafetyApp() {
                                   </h3>
                                 </div>
 
-                                {/* SIF Score Circular Indicator */}
-                                <div className="shrink-0 flex flex-col items-center pl-2">
-                                  <div className="relative w-12 h-12 flex items-center justify-center">
-                                    <svg className="w-12 h-12 -rotate-90" viewBox="0 0 36 36">
-                                      {/* Background track */}
-                                      <circle
-                                        cx="18"
-                                        cy="18"
-                                        r="15"
-                                        fill="none"
-                                        className="stroke-slate-100"
-                                        strokeWidth="3"
-                                      />
-                                      {/* Dynamic progress circle */}
-                                      <circle
-                                        cx="18"
-                                        cy="18"
-                                        r="15"
-                                        fill="none"
-                                        stroke={report.is_sif ? '#e11d48' : '#059669'}
-                                        strokeWidth="3"
-                                        strokeDasharray="94.2"
-                                        strokeDashoffset={94.2 - (94.2 * Math.min(100, Math.max(0, report.risk_score || 75))) / 100}
-                                        strokeLinecap="round"
-                                        className="transition-all duration-500"
-                                      />
-                                    </svg>
-                                    {/* Center score in circle */}
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                                      <span className={`text-[12px] font-black font-mono leading-none ${
-                                        report.is_sif ? 'text-rose-600' : 'text-emerald-700'
-                                      }`}>
-                                        {report.risk_score || 75}
-                                      </span>
-                                      <span className="text-[7px] font-bold text-slate-400 leading-none mt-0.5">
-                                        /100
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <span className={`text-[8px] font-bold mt-1 px-1.5 py-0.5 rounded-full uppercase tracking-tight ${
-                                    report.is_sif ? 'text-rose-700 bg-rose-50 border border-rose-200' : 'text-slate-600 bg-slate-100 border border-slate-200'
+                                {/* SIF Status Indicator (No numeric score) */}
+                                <div className="shrink-0 flex items-center pl-2">
+                                  <span className={`px-2.5 py-1.5 rounded-xl font-black text-[11px] uppercase tracking-wide flex items-center gap-1 font-mono border shadow-2xs ${
+                                    report.is_sif 
+                                      ? 'bg-rose-50 text-rose-600 border-rose-200' 
+                                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                   }`}>
-                                    {report.is_sif ? 'SIF' : 'Non-SIF'}
+                                    {report.is_sif ? '🚨 SIF' : '✅ NON-SIF'}
                                   </span>
                                 </div>
                               </div>
@@ -2702,31 +2667,6 @@ export default function MobileSafetyApp() {
                           {aiAnalysisModalData.status || 'Under Review'}
                         </span>
                       </div>
-                      {/* Score in Circle */}
-                      <div className="relative w-11 h-11 shrink-0 flex items-center justify-center">
-                        <svg className="w-11 h-11 -rotate-90" viewBox="0 0 36 36">
-                          <circle cx="18" cy="18" r="15" fill="none" className="stroke-black/10" strokeWidth="3" />
-                          <circle
-                            cx="18"
-                            cy="18"
-                            r="15"
-                            fill="none"
-                            stroke={aiAnalysisModalData.is_sif ? '#e11d48' : '#059669'}
-                            strokeWidth="3"
-                            strokeDasharray="94.2"
-                            strokeDashoffset={94.2 - (94.2 * Math.min(100, Math.max(0, aiAnalysisModalData.risk_score || 75))) / 100}
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                          <span className="text-[11px] font-black font-mono leading-none">
-                            {aiAnalysisModalData.risk_score || 75}
-                          </span>
-                          <span className="text-[6.5px] font-bold opacity-60 leading-none mt-0.5">
-                            /100
-                          </span>
-                        </div>
-                      </div>
                     </div>
                     <h4 className="text-sm font-bold text-slate-900 leading-snug">
                       {aiAnalysisModalData.title}
@@ -2877,10 +2817,10 @@ export default function MobileSafetyApp() {
                       </span>
                     </div>
                     <div className="text-right">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                        locationViewIncident.is_sif ? 'bg-rose-100 text-rose-700 font-mono' : 'bg-emerald-100 text-emerald-700 font-mono'
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase font-mono border ${
+                        locationViewIncident.is_sif ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       }`}>
-                        SIF: {locationViewIncident.risk_score || 75}/100
+                        {locationViewIncident.is_sif ? '🚨 SIF' : '✅ NON-SIF'}
                       </span>
                     </div>
                   </div>
