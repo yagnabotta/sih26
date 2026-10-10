@@ -216,12 +216,12 @@ export default function MobileSafetyApp() {
   const [sosCountdown, setSosCountdown] = useState(null);
   const [sosDispatched, setSosDispatched] = useState(false);
 
-  // Dynamic KPI counts
-  const [kpis, setKpis] = useState({
-    openIncidents: 24,
-    actionsPending: 12,
-    underInvestigation: 7,
-    escalated: 3
+  // Analytics Overview Counts (Actual Incident Data - No Hardcoded Values)
+  const [analyticsOverview, setAnalyticsOverview] = useState({
+    totalIncidents: 0,
+    pending: 0,
+    sif: 0,
+    nonSif: 0
   });
 
   // Recent Alert Banner Data
@@ -235,10 +235,77 @@ export default function MobileSafetyApp() {
   const recordingTimerRef = useRef(null);
   const recognitionRef = useRef(null);
 
+  // Fetch real analytics overview metrics directly from backend intelligence APIs
+  const fetchAnalyticsData = async () => {
+    try {
+      // 1. Primary: query backend dashboard endpoint (scoped to current organization/system)
+      const data = await api.getDashboardData();
+      if (data && typeof data.total_reports === 'number') {
+        const total = data.total_reports || 0;
+        const sif = data.potential_sif_findings ?? data.total_sif_precursors ?? 0;
+        const nonSif = Math.max(0, total - sif);
+        const pending = data.awaiting_review !== undefined ? data.awaiting_review : 0;
+        setAnalyticsOverview({
+          totalIncidents: total,
+          pending: pending,
+          sif: sif,
+          nonSif: nonSif
+        });
+        return;
+      }
+    } catch (e) {
+      // Gracefully continue to secondary report lists
+    }
+
+    try {
+      // 2. Secondary fallback: calculate from backend reports list
+      const reports = await api.getReports();
+      if (Array.isArray(reports)) {
+        const total = reports.length;
+        const sif = reports.filter(r => r.sif_precursor_assessment === 'YES').length;
+        const nonSif = Math.max(0, total - sif);
+        const pending = reports.filter(r =>
+          r.analysis_status === 'PENDING' ||
+          r.status === 'Open' ||
+          r.status === 'In Progress' ||
+          r.status === 'Verification Pending' ||
+          !r.has_feedback
+        ).length;
+        setAnalyticsOverview({
+          totalIncidents: total,
+          pending: pending,
+          sif: sif,
+          nonSif: nonSif
+        });
+        return;
+      }
+    } catch (e) {}
+
+    try {
+      // 3. Fallback: local store / safetyStore state
+      const storeState = getStoreState();
+      const localReports = storeState.reports || [];
+      const total = localReports.length;
+      const sif = localReports.filter(r => r.sif_precursor_assessment === 'YES' || r.risk_level === 'Critical').length;
+      const nonSif = Math.max(0, total - sif);
+      const pending = localReports.filter(r => r.analysis_status === 'PENDING' || r.status === 'Open').length;
+      setAnalyticsOverview({
+        totalIncidents: total,
+        pending: pending,
+        sif: sif,
+        nonSif: nonSif
+      });
+    } catch (e) {}
+  };
+
   useEffect(() => {
     if (currentUser) {
       fetchTasks();
-      const interval = setInterval(fetchTasks, 5000);
+      fetchAnalyticsData();
+      const interval = setInterval(() => {
+        fetchTasks();
+        fetchAnalyticsData();
+      }, 5000);
       return () => clearInterval(interval);
     }
   }, [selectedDept, currentUser]);
@@ -248,17 +315,6 @@ export default function MobileSafetyApp() {
       const res = await api.getResponseTasks(selectedDept === 'ALL' ? null : selectedDept);
       if (res && Array.isArray(res)) {
         setTasks(res);
-        const open = res.filter(t => t.status === 'ASSIGNED').length;
-        const pending = res.filter(t => t.status === 'ACCEPTED' || t.status === 'REWORK_REQUESTED').length;
-        const review = res.filter(t => t.status === 'SUBMITTED_FOR_VERIFICATION').length;
-        const crit = res.filter(t => t.priority === 'CRITICAL').length;
-        
-        setKpis({
-          openIncidents: open + 18,
-          actionsPending: pending || 12,
-          underInvestigation: review || 7,
-          escalated: crit || 3
-        });
       }
     } catch (e) {
       console.warn('API fetchTasks fallback:', e);
@@ -301,6 +357,12 @@ export default function MobileSafetyApp() {
     try {
       const res = await api.login('id001', emailInput, passwordInput);
       if (res && res.user) {
+        if (res.access_token) {
+          try {
+            localStorage.setItem('safetyai_token', res.access_token);
+            localStorage.setItem('safetyai_user', JSON.stringify(res.user));
+          } catch (e) {}
+        }
         setCurrentUser(res.user);
         setScreenMode('app');
         setActiveTab('home');
@@ -710,12 +772,15 @@ export default function MobileSafetyApp() {
         localStorage.setItem('safetyai_active_reports', JSON.stringify([newRecord, ...stored]));
       } catch (e) {}
 
-      // 3. Increment KPI metrics
-      setKpis(prev => ({
+      // 3. Increment Analytics Overview metrics and sync with backend
+      setAnalyticsOverview(prev => ({
         ...prev,
-        openIncidents: prev.openIncidents + 1,
-        actionsPending: prev.actionsPending + 1
+        totalIncidents: prev.totalIncidents + 1,
+        pending: prev.pending + 1,
+        sif: isSIF ? prev.sif + 1 : prev.sif,
+        nonSif: isSIF ? prev.nonSif : prev.nonSif + 1
       }));
+      fetchAnalyticsData();
 
       // 4. Dispatch a real response task into active tasks radar
       const newTask = {
@@ -1200,7 +1265,7 @@ export default function MobileSafetyApp() {
         {screenMode === 'app' && currentUser && (
           <>
             {/* TOP HEADER: USER GREETING & LOGOUT BUTTON */}
-            <section aria-label="App Navigation Header" className="bg-white px-5 pt-3 pb-3 border-b border-slate-100 sticky top-7 z-30">
+            <section aria-label="App Navigation Header" className="bg-white px-5 pt-3.5 pb-3 border-b border-slate-100 shrink-0 z-30 shadow-2xs">
               <div className="flex items-center justify-between mb-2">
                 {/* Minimalist App Logo Button (1-Tap Navigates to Dashboard) */}
                 <button
@@ -1282,79 +1347,83 @@ export default function MobileSafetyApp() {
                 <div className="space-y-5 animate-fadeIn">
                   
 
-                  {/* INCIDENT OVERVIEW (2x2 GRID) */}
+                  {/* ANALYTICS OVERVIEW (2x2 GRID) */}
                   <div className="space-y-3">
                     <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                      Incident Overview
+                      Analytics Overview
                     </h2>
 
                     <div className="grid grid-cols-2 gap-3">
                       
+                      {/* CARD 1: Total Incidents */}
                       <div 
                         onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer"
+                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xs">
+                          <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
                             <FileText className="w-4 h-4" />
                           </div>
                           <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {kpis.openIncidents}
+                            {analyticsOverview.totalIncidents}
                           </span>
                         </div>
                         <div className="text-xs font-semibold text-slate-500">
-                          Open Incidents
+                          Total Incidents
                         </div>
                       </div>
 
+                      {/* CARD 2: Pending */}
                       <div 
                         onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer"
+                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-2xs">
-                            <Wrench className="w-4 h-4" />
+                          <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                            <Clock className="w-4 h-4" />
                           </div>
                           <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {kpis.actionsPending}
+                            {analyticsOverview.pending}
                           </span>
                         </div>
                         <div className="text-xs font-semibold text-slate-500">
-                          Actions Pending
+                          Pending
                         </div>
                       </div>
 
+                      {/* CARD 3: SIF */}
                       <div 
                         onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer"
+                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-2xs">
-                            <Search className="w-4 h-4" />
+                          <div className="w-8 h-8 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                            <AlertTriangle className="w-4 h-4" />
                           </div>
                           <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {kpis.underInvestigation < 10 ? `0${kpis.underInvestigation}` : kpis.underInvestigation}
+                            {analyticsOverview.sif}
                           </span>
                         </div>
                         <div className="text-xs font-semibold text-slate-500">
-                          Under Investigation
+                          SIF
                         </div>
                       </div>
 
+                      {/* CARD 4: Non-SIF */}
                       <div 
-                        onClick={() => setActiveTab('alerts')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer"
+                        onClick={() => setActiveTab('incidents')}
+                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-2xs">
-                            <AlertCircle className="w-4 h-4" />
+                          <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                            <ShieldCheck className="w-4 h-4" />
                           </div>
                           <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {kpis.escalated < 10 ? `0${kpis.escalated}` : kpis.escalated}
+                            {analyticsOverview.nonSif}
                           </span>
                         </div>
                         <div className="text-xs font-semibold text-slate-500">
-                          Escalated
+                          Non-SIF
                         </div>
                       </div>
 
