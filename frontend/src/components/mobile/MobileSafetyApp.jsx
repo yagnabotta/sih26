@@ -1990,24 +1990,6 @@ export default function MobileSafetyApp() {
                         </div>
                       </div>
 
-                      {/* QUICK TEST SCENARIO PRESETS */}
-                      <div className="space-y-1 pt-1">
-                        <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
-                          ⚡ 1-Tap Sample Presets (From Platform)
-                        </span>
-                        <div className="grid grid-cols-3 gap-1.5">
-                          {SAMPLE_PRESETS.map((p, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => handleApplyPreset(p)}
-                              className="p-1.5 rounded-xl bg-slate-50 border border-slate-200 text-[10px] font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 text-left transition-all leading-tight"
-                            >
-                              {p.title}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
 
                       {/* ATTACH PHOTO */}
                       <div className="flex items-center gap-2 pt-1">
