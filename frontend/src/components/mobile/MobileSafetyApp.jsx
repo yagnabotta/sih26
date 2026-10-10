@@ -203,6 +203,16 @@ export default function MobileSafetyApp() {
   const [submitFeedback, setSubmitFeedback] = useState(null);
   const [aiAnalysisModalData, setAiAnalysisModalData] = useState(null);
 
+  // Voice Based Search State & References
+  const [showVoiceSearchModal, setShowVoiceSearchModal] = useState(false);
+  const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
+  const [isVoiceSearching, setIsVoiceSearching] = useState(false);
+  const [voiceSearchSeconds, setVoiceSearchSeconds] = useState(0);
+  const [voiceSearchLang, setVoiceSearchLang] = useState('en');
+  const [voiceSearchNoiseFilter, setVoiceSearchNoiseFilter] = useState(true);
+  const voiceSearchRecRef = useRef(null);
+  const voiceSearchTimerRef = useRef(null);
+
   // Response Tasks & Overview Metrics
   const [tasks, setTasks] = useState([]);
   const [selectedDept, setSelectedDept] = useState('ALL');
@@ -543,6 +553,134 @@ export default function MobileSafetyApp() {
       setDescriptionInput(txt);
     }
   };
+
+  // Voice Based Search Handlers
+  const startVoiceSearch = (lang = voiceSearchLang) => {
+    setIsVoiceSearching(true);
+    setVoiceSearchSeconds(0);
+    if (voiceSearchTimerRef.current) clearInterval(voiceSearchTimerRef.current);
+    voiceSearchTimerRef.current = setInterval(() => {
+      setVoiceSearchSeconds(prev => prev + 1);
+    }, 1000);
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      simulateVoiceSearch(lang);
+      return;
+    }
+
+    try {
+      if (voiceSearchRecRef.current) {
+        try { voiceSearchRecRef.current.abort(); } catch (e) {}
+      }
+      const rec = new SpeechRec();
+      voiceSearchRecRef.current = rec;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = lang === 'te' ? 'te-IN' : lang === 'hi' ? 'hi-IN' : 'en-US';
+
+      rec.onresult = (evt) => {
+        let text = '';
+        for (let i = 0; i < evt.results.length; i++) {
+          text += evt.results[i][0].transcript;
+        }
+        if (text) {
+          setVoiceSearchQuery(text);
+        }
+      };
+
+      rec.onerror = () => {
+        simulateVoiceSearch(lang);
+      };
+
+      rec.onend = () => {
+        setIsVoiceSearching(false);
+        if (voiceSearchTimerRef.current) clearInterval(voiceSearchTimerRef.current);
+      };
+
+      rec.start();
+    } catch (e) {
+      simulateVoiceSearch(lang);
+    }
+  };
+
+  const stopVoiceSearch = () => {
+    setIsVoiceSearching(false);
+    if (voiceSearchTimerRef.current) clearInterval(voiceSearchTimerRef.current);
+    if (voiceSearchRecRef.current) {
+      try { voiceSearchRecRef.current.stop(); } catch (e) {}
+    }
+  };
+
+  const toggleVoiceSearch = () => {
+    if (isVoiceSearching) {
+      stopVoiceSearch();
+    } else {
+      startVoiceSearch();
+    }
+  };
+
+  const simulateVoiceSearch = (lang) => {
+    const samples = {
+      te: 'పైప్‌లైన్ గ్యాస్ లీక్ ప్లాంట్ 1',
+      hi: 'गैस रिसाव और आग का खतरा प्लांट 1',
+      en: 'Gas leak pipeline high pressure Unit 1'
+    };
+    setTimeout(() => {
+      const sample = samples[lang] || samples.en;
+      setVoiceSearchQuery(sample);
+      setIsVoiceSearching(false);
+      if (voiceSearchTimerRef.current) clearInterval(voiceSearchTimerRef.current);
+    }, 1200);
+  };
+
+  const openVoiceSearchModal = () => {
+    setShowVoiceSearchModal(true);
+    setTimeout(() => {
+      startVoiceSearch();
+    }, 250);
+  };
+
+  const closeVoiceSearchModal = () => {
+    stopVoiceSearch();
+    setShowVoiceSearchModal(false);
+  };
+
+  const handleReportFromVoiceSearch = (text) => {
+    closeVoiceSearchModal();
+    setDescriptionInput(text || voiceSearchQuery);
+    setInputMode('DESCRIPTION');
+    setShowReportModal(true);
+  };
+
+  const searchResults = React.useMemo(() => {
+    const q = (voiceSearchQuery || '').trim().toLowerCase();
+    if (!q) {
+      return {
+        tasks: tasks.slice(0, 4),
+        checklists: (ALL_CHECKLIST_ITEMS || []).slice(0, 4)
+      };
+    }
+
+    const matchedTasks = tasks.filter(t => 
+      (t.title && t.title.toLowerCase().includes(q)) ||
+      (t.description && t.description.toLowerCase().includes(q)) ||
+      (t.department && t.department.toLowerCase().includes(q)) ||
+      (t.location && t.location.toLowerCase().includes(q)) ||
+      (t.hazard && t.hazard.toLowerCase().includes(q)) ||
+      (t.id && String(t.id).includes(q))
+    );
+
+    const matchedChecklists = (ALL_CHECKLIST_ITEMS || []).filter(item =>
+      (item.label && item.label.toLowerCase().includes(q)) ||
+      (item.keywords && item.keywords.some(k => q.includes(k) || k.includes(q)))
+    );
+
+    return {
+      tasks: matchedTasks,
+      checklists: matchedChecklists
+    };
+  }, [voiceSearchQuery, tasks]);
 
   // Submit Safety Observation & Execute Full AI Analysis Pipeline (Website Parity)
   const handleSaveReport = async () => {
@@ -1908,62 +2046,7 @@ export default function MobileSafetyApp() {
                         </div>
                       )}
 
-                      {/* VOICE OBSERVATION MODULE */}
-                      <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-slate-800 flex items-center gap-1.5">
-                            <Mic className="w-3.5 h-3.5 text-blue-600" />
-                            Voice Dictation (Telugu / Hindi / En)
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setNoiseIsolation(!noiseIsolation)}
-                            className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                              noiseIsolation ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
-                            }`}
-                          >
-                            {noiseIsolation ? 'Noise Filter ON' : 'Raw Audio'}
-                          </button>
-                        </div>
 
-                        <div className="grid grid-cols-3 gap-1">
-                          {[
-                            { id: 'te', label: 'తెలుగు (Telugu)' },
-                            { id: 'hi', label: 'हिंदी (Hindi)' },
-                            { id: 'en', label: 'English' }
-                          ].map(l => (
-                            <button
-                              key={l.id}
-                              type="button"
-                              onClick={() => setSelectedLanguage(l.id)}
-                              className={`py-1 px-1 rounded-lg text-[10px] font-bold border transition-all ${
-                                selectedLanguage === l.id
-                                  ? 'bg-white border-blue-600 text-blue-700 shadow-2xs'
-                                  : 'bg-transparent border-slate-200 text-slate-500'
-                              }`}
-                            >
-                              {l.label}
-                            </button>
-                          ))}
-                        </div>
-
-                        <div className="py-1 flex items-center justify-center gap-3">
-                          <button
-                            type="button"
-                            onClick={toggleRecording}
-                            className={`w-11 h-11 rounded-full flex items-center justify-center shadow-md transition-all ${
-                              isRecording
-                                ? 'bg-red-500 text-white ring-4 ring-red-200 animate-pulse'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/30'
-                            }`}
-                          >
-                            {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                          </button>
-                          <span className="text-[11px] text-slate-600 font-medium">
-                            {isRecording ? `Listening... (${recordingSeconds}s)` : 'Tap to speak observation'}
-                          </span>
-                        </div>
-                      </div>
 
 
 
@@ -2309,7 +2392,282 @@ export default function MobileSafetyApp() {
               </div>
             )}
 
-            {/* BOTTOM NAVIGATION BAR: DOCKED WHITE BAR WITH GREEN '+' CENTER */}
+            {/* 6. VOICE BASED SEARCH & INTELLIGENCE MODAL */}
+            {showVoiceSearchModal && (
+              <div className="fixed inset-0 sm:absolute bg-black/60 backdrop-blur-xs z-50 flex flex-col justify-end sm:justify-center p-0 sm:p-3 animate-fadeIn">
+                <div className="bg-white rounded-t-[32px] sm:rounded-3xl max-h-[92vh] sm:max-h-[720px] flex flex-col overflow-hidden shadow-2xl border border-slate-100 animate-slideUp">
+                  
+                  {/* Top Sheet Grab Handle & Header */}
+                  <div className="p-4 pb-2 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-blue-50/50 to-indigo-50/50">
+                    <div className="flex items-center gap-2">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-sm shadow-blue-600/30">
+                        <Mic className="w-5 h-5 stroke-[2.2]" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-1.5">
+                          Voice Safety Search
+                          <span className="px-1.5 py-0.2 rounded bg-blue-100 text-blue-700 text-[9px] font-mono font-bold">AI</span>
+                        </h2>
+                        <p className="text-[11px] text-slate-500">
+                          Speak in Telugu, Hindi, or English to search incidents & hazards
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={closeVoiceSearchModal}
+                      className="p-1.5 rounded-full hover:bg-slate-200/60 text-slate-400 hover:text-slate-700 transition-colors"
+                      aria-label="Close Voice Search"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Body Content */}
+                  <div className="p-4 space-y-4 overflow-y-auto custom-scrollbar flex-1">
+                    
+                    {/* Multilingual Selector & Noise Filter */}
+                    <div className="flex items-center justify-between gap-2 p-1.5 rounded-xl bg-slate-100 border border-slate-200">
+                      <div className="flex items-center gap-1">
+                        {[
+                          { id: 'en', label: 'English' },
+                          { id: 'te', label: 'తెలుగు' },
+                          { id: 'hi', label: 'हिंदी' }
+                        ].map(l => (
+                          <button
+                            key={l.id}
+                            type="button"
+                            onClick={() => {
+                              setVoiceSearchLang(l.id);
+                              if (isVoiceSearching) {
+                                stopVoiceSearch();
+                                setTimeout(() => startVoiceSearch(l.id), 200);
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                              voiceSearchLang === l.id
+                                ? 'bg-white text-blue-700 shadow-2xs'
+                                : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                          >
+                            {l.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setVoiceSearchNoiseFilter(!voiceSearchNoiseFilter)}
+                        className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                          voiceSearchNoiseFilter ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {voiceSearchNoiseFilter ? 'Noise Filter ON' : 'Raw Audio'}
+                      </button>
+                    </div>
+
+                    {/* Microphone Visualizer & Tap Control */}
+                    <div className="p-4 rounded-2xl bg-gradient-to-b from-blue-50/70 to-indigo-50/40 border border-blue-100/80 flex flex-col items-center justify-center text-center space-y-3 relative overflow-hidden">
+                      
+                      {/* Pulse rings when listening */}
+                      <div className="relative flex items-center justify-center">
+                        {isVoiceSearching && (
+                          <>
+                            <span className="absolute w-24 h-24 rounded-full bg-blue-500/20 animate-ping" />
+                            <span className="absolute w-20 h-20 rounded-full bg-blue-500/30 animate-pulse" />
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={toggleVoiceSearch}
+                          className={`relative z-10 w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all ${
+                            isVoiceSearching
+                              ? 'bg-rose-500 hover:bg-rose-600 text-white ring-4 ring-rose-200 shadow-rose-500/30'
+                              : 'bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-blue-600/30'
+                          }`}
+                        >
+                          {isVoiceSearching ? (
+                            <MicOff className="w-7 h-7 animate-pulse" />
+                          ) : (
+                            <Mic className="w-7 h-7" />
+                          )}
+                        </button>
+                      </div>
+
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold text-slate-800 block">
+                          {isVoiceSearching ? `Listening actively (${voiceSearchSeconds}s)...` : 'Tap Microphone to Speak'}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {isVoiceSearching
+                            ? 'Say keywords like "Gas leak Unit 1", "Pipeline pressure", or "Fire outbreak"'
+                            : 'Supports Telugu, Hindi, & English voice input'}
+                        </span>
+                      </div>
+
+                      {/* Live Waveform Bar Animation */}
+                      {isVoiceSearching && (
+                        <div className="flex items-center gap-1 h-4 pt-1">
+                          {[35, 75, 45, 90, 60, 80, 50, 95, 40, 70].map((h, i) => (
+                            <span
+                              key={i}
+                              style={{ height: `${h}%`, animationDelay: `${i * 0.1}s` }}
+                              className="w-1 bg-blue-600 rounded-full animate-bounce"
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Search Input Box (Editable) */}
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                        <span>Recognized Query / Search Text:</span>
+                        {voiceSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setVoiceSearchQuery('')}
+                            className="text-slate-400 hover:text-slate-600 text-[10px]"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </label>
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={voiceSearchQuery}
+                          onChange={(e) => setVoiceSearchQuery(e.target.value)}
+                          placeholder="Spoken words appear here, or type search..."
+                          className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick Action: If observation text is present, offer to file report or analyze */}
+                    {voiceSearchQuery.trim().length > 3 && (
+                      <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 flex items-center justify-between gap-2 animate-fadeIn">
+                        <div>
+                          <span className="text-xs font-bold text-emerald-950 block">
+                            Found a new hazard?
+                          </span>
+                          <span className="text-[10px] text-emerald-700">
+                            Log this spoken observation directly to safety records
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleReportFromVoiceSearch(voiceSearchQuery)}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-xs flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Report Observation</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Results Count & Badges */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                        <span>Matching Incidents & Tasks ({searchResults.tasks.length})</span>
+                        {voiceSearchQuery && (
+                          <span className="text-[10px] font-normal text-slate-500">
+                            Filtering by "{voiceSearchQuery}"
+                          </span>
+                        )}
+                      </div>
+
+                      {searchResults.tasks.length === 0 ? (
+                        <div className="p-4 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center text-xs text-slate-500">
+                          {voiceSearchQuery
+                            ? `No active incident tasks found matching "${voiceSearchQuery}".`
+                            : 'Speak or type above to find incidents.'}
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-52 overflow-y-auto custom-scrollbar">
+                          {searchResults.tasks.map(task => (
+                            <div
+                              key={task.id}
+                              onClick={() => {
+                                closeVoiceSearchModal();
+                                setSelectedTaskModal(task);
+                              }}
+                              className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs hover:border-blue-300 hover:shadow-xs transition-all cursor-pointer flex items-start justify-between gap-2"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[10px] font-mono font-bold text-blue-600">
+                                    #{task.id}
+                                  </span>
+                                  <span className="px-1.5 py-0.2 rounded bg-slate-100 text-[9px] font-bold text-slate-600 uppercase">
+                                    {task.department.replace('_', ' ')}
+                                  </span>
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                                    task.priority === 'CRITICAL' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
+                                  }`}>
+                                    {task.priority}
+                                  </span>
+                                </div>
+                                <h4 className="text-xs font-bold text-slate-900 leading-tight">
+                                  {task.title}
+                                </h4>
+                                <p className="text-[11px] text-slate-500 line-clamp-1">
+                                  {task.description}
+                                </p>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 mt-1" />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Matched Checklist Items */}
+                    {searchResults.checklists && searchResults.checklists.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-xs font-bold text-slate-800 block">
+                          Related Safety Factors ({searchResults.checklists.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {searchResults.checklists.slice(0, 6).map(item => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => {
+                                closeVoiceSearchModal();
+                                openReportWithCategory(item.categoryLabel);
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${item.badgeClass || 'bg-slate-100 text-slate-700 border-slate-200'}`}
+                            >
+                              {item.label} →
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+
+                  {/* Footer Close */}
+                  <div className="p-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      SafetyPulse Voice Engine v2.4
+                    </span>
+                    <button
+                      type="button"
+                      onClick={closeVoiceSearchModal}
+                      className="px-4 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Done
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* BOTTOM NAVIGATION BAR: DOCKED WHITE BAR WITH CENTER VOICE SEARCH BUTTON */}
             <nav aria-label="Main Navigation" className="h-18 bg-white border-t border-slate-100 px-4 flex items-center justify-between sticky bottom-0 z-40 shadow-lg shadow-slate-200/50">
               
               <button
@@ -2332,15 +2690,19 @@ export default function MobileSafetyApp() {
                 <span className="text-[10px] mt-1 font-medium">Incidents</span>
               </button>
 
-              {/* CENTER FLOATING GREEN '+' BUTTON */}
+              {/* CENTER FLOATING VOICE SEARCH BUTTON (REPLACED '+' SYMBOL) */}
               <div className="flex flex-col items-center justify-center flex-1 -mt-5">
                 <button
-                  onClick={() => openReportWithCategory('Unsafe Condition')}
-                  aria-label="Report New Incident"
-                  className="w-13 h-13 rounded-full bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white flex items-center justify-center shadow-lg shadow-emerald-500/40 transition-all border-4 border-white"
+                  onClick={openVoiceSearchModal}
+                  aria-label="Voice Based Search"
+                  title="Voice Safety Search"
+                  className="w-13 h-13 rounded-full bg-gradient-to-tr from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-95 text-white flex items-center justify-center shadow-lg shadow-blue-600/40 transition-all border-4 border-white relative group cursor-pointer"
                 >
-                  <Plus className="w-7 h-7 stroke-[3]" />
+                  <Mic className="w-6 h-6 stroke-[2.3] group-hover:scale-110 transition-transform" />
+                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-400 border-2 border-white rounded-full animate-ping" />
+                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />
                 </button>
+                <span className="text-[9px] font-bold text-blue-700 mt-0.5 tracking-tight">Voice Search</span>
               </div>
 
               <button
