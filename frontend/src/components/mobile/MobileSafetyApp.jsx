@@ -1843,10 +1843,7 @@ export default function MobileSafetyApp() {
                               <div className="flex items-start justify-between gap-2.5">
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
-                                      {report.report_number || 'REP-ID001'}
-                                    </span>
-                                    <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded uppercase">
+                                    <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full uppercase">
                                       {report.category || report.report_type || 'Near Miss'}
                                     </span>
                                   </div>
@@ -1871,11 +1868,6 @@ export default function MobileSafetyApp() {
                                   </span>
                                 </div>
                               </div>
-
-                              {/* Description Preview */}
-                              <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed bg-slate-50/70 p-2.5 rounded-xl border border-slate-100">
-                                {report.description}
-                              </p>
 
                               {/* Location & Metadata Row */}
                               <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
@@ -2607,9 +2599,16 @@ export default function MobileSafetyApp() {
                     <h4 className="text-sm font-bold text-slate-900 leading-snug">
                       {aiAnalysisModalData.title}
                     </h4>
-                    <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                      "{aiAnalysisModalData.description}"
-                    </p>
+                    {aiAnalysisModalData.description && (
+                      <div className="mt-2.5 p-3 rounded-xl bg-white/90 border border-slate-200/80 text-xs text-slate-700 leading-relaxed shadow-2xs">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                          Reported Incident Description
+                        </span>
+                        <p className="italic font-medium text-slate-800 whitespace-pre-wrap">
+                          "{aiAnalysisModalData.description}"
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* AI Breakdown Cards */}
