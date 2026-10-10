@@ -2790,24 +2790,19 @@ export default function MobileSafetyApp() {
                       </ul>
                     </div>
 
-                    {/* Emergency Responder Protocol & Dispatched Team */}
-                    <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200 space-y-2">
-                      <div className="flex items-center justify-between">
+                    {/* Dispatched Organization / Department */}
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 flex items-center justify-between">
+                      <div className="space-y-0.5">
                         <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1 font-mono">
-                          <Radio className="w-3 h-3 text-amber-600" /> Responder Protocol &amp; Dispatch
+                          <Building2 className="w-3.5 h-3.5 text-amber-600" /> Dispatched Organization
                         </span>
-                        <span className="text-[9px] font-bold bg-amber-600 text-white px-2 py-0.5 rounded-full font-mono">
-                          {aiAnalysisModalData.assigned_department_label || 'DISPATCHED'}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-white/90 border border-amber-200/60">
-                        <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">
-                          Responder Action ({aiAnalysisModalData.assigned_department_label}):
-                        </span>
-                        <p className="font-semibold text-slate-900 leading-relaxed text-xs">
-                          {aiAnalysisModalData.recommended_action}
+                        <p className="text-xs font-bold text-slate-900">
+                          {aiAnalysisModalData.assigned_department_label || 'Emergency Response Team'}
                         </p>
                       </div>
+                      <span className="text-[9px] font-bold bg-amber-600 text-white px-2.5 py-1 rounded-full font-mono">
+                        ASSIGNED
+                      </span>
                     </div>
 
 
