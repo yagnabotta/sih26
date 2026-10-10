@@ -2815,20 +2815,10 @@ export default function MobileSafetyApp() {
                   </div>
 
                   {/* Bottom Actions */}
-                  <div className="space-y-2 pt-1">
-                    <button
-                      onClick={() => {
-                        setSelectedDept(aiAnalysisModalData.assigned_department);
-                        setAiAnalysisModalData(null);
-                      }}
-                      className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold text-xs tracking-wide shadow-md shadow-blue-600/30 flex items-center justify-center gap-2 cursor-pointer transition-all"
-                    >
-                      <span>View Dispatched Task in Radar</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
+                  <div className="pt-2">
                     <button
                       onClick={() => setAiAnalysisModalData(null)}
-                      className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
+                      className="w-full py-3.5 rounded-2xl bg-slate-100 hover:bg-slate-200 active:scale-[0.99] text-slate-800 font-bold text-xs cursor-pointer transition-all"
                     >
                       Done / Return to Dashboard
                     </button>
