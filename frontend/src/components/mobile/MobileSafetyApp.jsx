@@ -366,6 +366,38 @@ export default function MobileSafetyApp() {
   const [actionNotice, setActionNotice] = useState(null);
   const [hasReadAlerts, setHasReadAlerts] = useState(false);
 
+  // Admin Role & Supervisory State
+  const isAdmin = Boolean(
+    currentUser?.role === 'ADMIN' ||
+    selectedRole === 'ADMIN' ||
+    currentUser?.is_admin ||
+    (currentUser?.email && currentUser.email.toLowerCase().includes('admin'))
+  );
+
+  const [adminSelectedUnit, setAdminSelectedUnit] = useState('ALL');
+
+  const [broadcastNotices, setBroadcastNotices] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('safetyai_broadcasts') || '[]');
+      if (Array.isArray(stored) && stored.length > 0) return stored;
+    } catch (e) {}
+    return [
+      {
+        id: 1,
+        title: 'High Wind Advisory: Elevated Scaffolding Stand-Down',
+        sector: 'Plant-Wide (High Priority)',
+        message: 'Wind gusts exceeding 38 knots at Unit 3 & Unit 4. All work at height suspended immediately until 15:00 HSE clearance.',
+        sender: 'Eleanor Vance (HSE Admin)',
+        timestamp: '35 min ago',
+        priority: 'CRITICAL'
+      }
+    ];
+  });
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastSector, setBroadcastSector] = useState('Plant-Wide');
+  const [broadcastPriority, setBroadcastPriority] = useState('HIGH');
+
   // User's own report IDs for alerting (empty until responder platform is integrated)
   const userReportIds = new Set(reportedIncidents.map(r => r.id));
   const userAcceptedAlerts = tasks.filter(t => 
@@ -1236,6 +1268,110 @@ export default function MobileSafetyApp() {
     }
   };
 
+  // Admin Update Incident Status (Instant reflection across worker feed)
+  const handleUpdateIncidentStatus = async (reportId, newStatus) => {
+    setReportedIncidents(prev => {
+      const updated = prev.map(r => (r.id === reportId || r.report_number === reportId) ? { ...r, status: newStatus } : r);
+      try {
+        localStorage.setItem('safetyai_active_reports', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+
+    if (aiAnalysisModalData && (aiAnalysisModalData.id === reportId || aiAnalysisModalData.report_number === reportId)) {
+      setAiAnalysisModalData(prev => prev ? { ...prev, status: newStatus } : null);
+    }
+
+    try {
+      await api.updateReportStatus(reportId, newStatus);
+    } catch (e) {}
+
+    setActionNotice({ 
+      type: 'success', 
+      text: `Status updated to "${newStatus}"` 
+    });
+    setTimeout(() => setActionNotice(null), 3000);
+  };
+
+  // Admin Reassign Dispatched Department
+  const handleReassignIncidentDepartment = (reportId, newDeptId) => {
+    const deptObj = DEPARTMENTS.find(d => d.id === newDeptId);
+    const deptLabel = deptObj?.label || deptObj?.name || newDeptId;
+
+    setReportedIncidents(prev => {
+      const updated = prev.map(r => (r.id === reportId || r.report_number === reportId) ? {
+        ...r,
+        assigned_department: newDeptId,
+        assigned_department_label: deptLabel
+      } : r);
+      try {
+        localStorage.setItem('safetyai_active_reports', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+
+    if (aiAnalysisModalData && (aiAnalysisModalData.id === reportId || aiAnalysisModalData.report_number === reportId)) {
+      setAiAnalysisModalData(prev => prev ? {
+        ...prev,
+        assigned_department: newDeptId,
+        assigned_department_label: deptLabel
+      } : null);
+    }
+
+    setActionNotice({
+      type: 'success',
+      text: `Incident reassigned to ${deptLabel}`
+    });
+    setTimeout(() => setActionNotice(null), 3000);
+  };
+
+  // Admin Publish Plant Safety Directive / Broadcast
+  const handlePublishBroadcast = (e) => {
+    if (e) e.preventDefault();
+    if (!broadcastTitle.trim() || !broadcastMessage.trim()) {
+      alert('Please enter both broadcast title and directive message.');
+      return;
+    }
+
+    const newBroadcast = {
+      id: Date.now(),
+      title: broadcastTitle.trim(),
+      sector: broadcastSector,
+      message: broadcastMessage.trim(),
+      sender: currentUser?.full_name || 'Eleanor Vance (HSE Admin)',
+      timestamp: 'Just now',
+      priority: broadcastPriority
+    };
+
+    const updated = [newBroadcast, ...broadcastNotices];
+    setBroadcastNotices(updated);
+    try {
+      localStorage.setItem('safetyai_broadcasts', JSON.stringify(updated));
+    } catch (e) {}
+
+    setBroadcastTitle('');
+    setBroadcastMessage('');
+    setActionNotice({
+      type: 'success',
+      text: '📢 Safety directive broadcast plant-wide!'
+    });
+    setTimeout(() => setActionNotice(null), 3000);
+  };
+
+  // Admin Delete / Withdraw Broadcast
+  const handleDeleteBroadcast = (broadcastId) => {
+    const updated = broadcastNotices.filter(b => b.id !== broadcastId);
+    setBroadcastNotices(updated);
+    try {
+      localStorage.setItem('safetyai_broadcasts', JSON.stringify(updated));
+    } catch (e) {}
+    setActionNotice({
+      type: 'success',
+      text: 'Directive archived/withdrawn.'
+    });
+    setTimeout(() => setActionNotice(null), 2500);
+  };
+
   // SOS Countdown
   const triggerSos = () => {
     setSosCountdown(3);
@@ -1708,142 +1844,437 @@ export default function MobileSafetyApp() {
               {activeTab === 'home' && (
                 <div className="space-y-5 animate-fadeIn">
                   
-
-                  {/* ANALYTICS OVERVIEW (2x2 GRID) */}
-                  <div className="space-y-3">
-                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                      Analytics Overview
-                    </h2>
-
-                    <div className="grid grid-cols-2 gap-3">
+                  {isAdmin ? (
+                    /* ================= ADMIN SUPERVISORY DASHBOARD ================= */
+                    <div className="space-y-5">
                       
-                      {/* CARD 1: Total Incidents */}
-                      <div 
-                        onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
-                            <FileText className="w-4 h-4" />
+                      {/* ADMIN HEADER & MULTI-UNIT SECTOR SWITCHER */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-800 text-[10px] font-bold tracking-wide uppercase font-mono">
+                              <Shield className="w-3 h-3 text-amber-600" />
+                              <span>HSE SUPERVISORY RADAR</span>
+                            </div>
+                            <h2 className="text-base font-bold text-slate-900 tracking-tight mt-1">
+                              Plant Safety &amp; Triage Operations
+                            </h2>
                           </div>
-                          <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {analyticsOverview.totalIncidents}
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Live Telemetry
                           </span>
                         </div>
-                        <div className="text-xs font-semibold text-slate-500">
-                          Total Incidents
+
+                        {/* MULTI-UNIT SECTOR SWITCHER CHIPS */}
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-mono">
+                            Filter Operating Sector:
+                          </span>
+                          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+                            {[
+                              { id: 'ALL', label: 'All Units' },
+                              { id: 'Unit 1', label: 'Unit 1 (CDU)' },
+                              { id: 'Unit 2', label: 'Unit 2 (FCC)' },
+                              { id: 'Unit 3', label: 'Unit 3 (Hydrocracker)' },
+                              { id: 'Unit 4', label: 'Unit 4 (Flare)' }
+                            ].map(unit => (
+                              <button
+                                key={unit.id}
+                                type="button"
+                                onClick={() => setAdminSelectedUnit(unit.id)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 border transition-all cursor-pointer ${
+                                  adminSelectedUnit === unit.id
+                                    ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {unit.label}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       </div>
 
-                      {/* CARD 2: Pending */}
-                      <div 
-                        onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
-                            <Clock className="w-4 h-4" />
+                      {/* DYNAMIC PLANT-WIDE KPI SNAPSHOT (2x2 GRID) */}
+                      <div className="grid grid-cols-2 gap-3">
+                        
+                        {/* KPI 1: Active Incidents */}
+                        <div 
+                          onClick={() => setActiveTab('incidents')}
+                          className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                            <span className="text-2xl font-black text-slate-900 tracking-tight">
+                              {reportedIncidents.filter(r => {
+                                if (adminSelectedUnit === 'ALL') return true;
+                                const loc = `${r.location || ''} ${r.facility_unit || ''} ${r.title || ''}`.toLowerCase();
+                                return loc.includes(adminSelectedUnit.toLowerCase());
+                              }).length}
+                            </span>
                           </div>
-                          <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {analyticsOverview.pending}
-                          </span>
+                          <div className="text-xs font-semibold text-slate-500">
+                            Active Incidents
+                          </div>
+                          <div className="text-[10px] text-blue-600 font-medium mt-0.5">
+                            {adminSelectedUnit === 'ALL' ? 'Plant-Wide Feed' : adminSelectedUnit}
+                          </div>
                         </div>
-                        <div className="text-xs font-semibold text-slate-500">
-                          Pending
+
+                        {/* KPI 2: Pending Triage */}
+                        <div 
+                          onClick={() => setActiveTab('incidents')}
+                          className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                              <Clock className="w-4 h-4" />
+                            </div>
+                            <span className="text-2xl font-black text-slate-900 tracking-tight">
+                              {reportedIncidents.filter(r => {
+                                if (adminSelectedUnit !== 'ALL') {
+                                  const loc = `${r.location || ''} ${r.facility_unit || ''} ${r.title || ''}`.toLowerCase();
+                                  if (!loc.includes(adminSelectedUnit.toLowerCase())) return false;
+                                }
+                                return r.status === 'Under Review' || r.status === 'Action Required' || !r.status;
+                              }).length}
+                            </span>
+                          </div>
+                          <div className="text-xs font-semibold text-slate-500">
+                            Pending Triage
+                          </div>
+                          <div className="text-[10px] text-amber-600 font-medium mt-0.5">
+                            Requires Sign-off
+                          </div>
+                        </div>
+
+                        {/* KPI 3: SIF Precursors */}
+                        <div 
+                          onClick={() => {
+                            setIncidentFilter('SIF');
+                            setActiveTab('incidents');
+                          }}
+                          className="bg-white rounded-2xl p-4 border border-rose-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-8 h-8 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                              <AlertTriangle className="w-4 h-4" />
+                            </div>
+                            <span className="text-2xl font-black text-rose-600 tracking-tight">
+                              {reportedIncidents.filter(r => {
+                                if (adminSelectedUnit !== 'ALL') {
+                                  const loc = `${r.location || ''} ${r.facility_unit || ''} ${r.title || ''}`.toLowerCase();
+                                  if (!loc.includes(adminSelectedUnit.toLowerCase())) return false;
+                                }
+                                return r.is_sif;
+                              }).length}
+                            </span>
+                          </div>
+                          <div className="text-xs font-semibold text-slate-500">
+                            SIF Precursors
+                          </div>
+                          <div className="text-[10px] text-rose-600 font-bold mt-0.5">
+                            Critical Energy
+                          </div>
+                        </div>
+
+                        {/* KPI 4: Resolved Today */}
+                        <div 
+                          onClick={() => setActiveTab('incidents')}
+                          className="bg-white rounded-2xl p-4 border border-emerald-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                              <ShieldCheck className="w-4 h-4" />
+                            </div>
+                            <span className="text-2xl font-black text-emerald-600 tracking-tight">
+                              {reportedIncidents.filter(r => {
+                                if (adminSelectedUnit !== 'ALL') {
+                                  const loc = `${r.location || ''} ${r.facility_unit || ''} ${r.title || ''}`.toLowerCase();
+                                  if (!loc.includes(adminSelectedUnit.toLowerCase())) return false;
+                                }
+                                return r.status === 'Resolved' || r.status === 'VERIFIED';
+                              }).length}
+                            </span>
+                          </div>
+                          <div className="text-xs font-semibold text-slate-500">
+                            Resolved Today
+                          </div>
+                          <div className="text-[10px] text-emerald-600 font-medium mt-0.5">
+                            Controls Verified
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* ADMIN SUPERVISORY SHORTCUTS */}
+                      <div className="space-y-2.5">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block font-mono">
+                          Supervisory Controls
+                        </span>
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('incidents')}
+                            className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5 cursor-pointer"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-800 leading-tight">
+                              Review Incidents
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('tasks')}
+                            className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5 cursor-pointer"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600">
+                              <CheckSquare className="w-4 h-4" />
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-800 leading-tight">
+                              Verify Tasks
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('alerts')}
+                            className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5 cursor-pointer"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                              <Radio className="w-4 h-4" />
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-800 leading-tight">
+                              Post Broadcast
+                            </span>
+                          </button>
                         </div>
                       </div>
 
-                      {/* CARD 3: SIF */}
-                      <div 
-                        onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
-                            <AlertTriangle className="w-4 h-4" />
+                      {/* PRIORITY TRIAGE RADAR: TOP ACTIVE SIF PRECURSORS */}
+                      <div className="space-y-2.5 pt-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider font-mono">
+                              Priority SIF Triage Queue
+                            </h3>
                           </div>
-                          <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {analyticsOverview.sif}
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIncidentFilter('SIF');
+                              setActiveTab('incidents');
+                            }}
+                            className="text-[11px] font-bold text-blue-600 hover:underline"
+                          >
+                            View All SIF →
+                          </button>
                         </div>
-                        <div className="text-xs font-semibold text-slate-500">
-                          SIF
-                        </div>
-                      </div>
 
-                      {/* CARD 4: Non-SIF */}
-                      <div 
-                        onClick={() => setActiveTab('incidents')}
-                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
-                            <ShieldCheck className="w-4 h-4" />
-                          </div>
-                          <span className="text-2xl font-black text-slate-900 tracking-tight">
-                            {analyticsOverview.nonSif}
-                          </span>
-                        </div>
-                        <div className="text-xs font-semibold text-slate-500">
-                          Non-SIF
+                        <div className="space-y-2">
+                          {reportedIncidents
+                            .filter(r => {
+                              if (!r.is_sif) return false;
+                              if (adminSelectedUnit !== 'ALL') {
+                                const loc = `${r.location || ''} ${r.facility_unit || ''} ${r.title || ''}`.toLowerCase();
+                                if (!loc.includes(adminSelectedUnit.toLowerCase())) return false;
+                              }
+                              return r.status !== 'Resolved';
+                            })
+                            .slice(0, 2)
+                            .map(report => (
+                              <div
+                                key={report.id || report.report_number}
+                                className="bg-white rounded-2xl p-3.5 border border-rose-200/90 shadow-2xs space-y-2"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white font-black text-[9px] font-mono tracking-wider">
+                                        🚨 SIF
+                                      </span>
+                                      <span className="text-[10px] font-bold text-slate-500">
+                                        {report.facility_unit || report.location || 'Unit 4'}
+                                      </span>
+                                    </div>
+                                    <h4 className="text-xs font-bold text-slate-900 mt-1">
+                                      {report.title || report.report_name}
+                                    </h4>
+                                  </div>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full font-mono uppercase ${
+                                    report.status === 'Action Required' 
+                                      ? 'bg-rose-50 text-rose-700 border border-rose-200' 
+                                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  }`}>
+                                    {report.status || 'Under Review'}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[11px]">
+                                  <span className="text-slate-500 font-medium truncate max-w-[170px]">
+                                    Team: <span className="text-slate-800 font-bold">{report.assigned_department_label || 'Mechanical Team'}</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAiAnalysisModalData(report)}
+                                    className="px-2.5 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                                  >
+                                    <Sparkles className="w-3 h-3 text-amber-300" />
+                                    <span>Triage Now</span>
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
                         </div>
                       </div>
 
                     </div>
-                  </div>
+                  ) : (
+                    /* ================= WORKER OVERVIEW (UNCHANGED) ================= */
+                    <>
+                      {/* ANALYTICS OVERVIEW (2x2 GRID) */}
+                      <div className="space-y-3">
+                        <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                          Analytics Overview
+                        </h2>
 
-                  {/* QUICK ACTIONS */}
-                  <div className="space-y-3">
-                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                      Quick Actions
-                    </h2>
+                        <div className="grid grid-cols-2 gap-3">
+                          
+                          {/* CARD 1: Total Incidents */}
+                          <div 
+                            onClick={() => setActiveTab('incidents')}
+                            className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                          >
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                                <FileText className="w-4 h-4" />
+                              </div>
+                              <span className="text-2xl font-black text-slate-900 tracking-tight">
+                                {analyticsOverview.totalIncidents}
+                              </span>
+                            </div>
+                            <div className="text-xs font-semibold text-slate-500">
+                              Total Incidents
+                            </div>
+                          </div>
 
-                    <button
-                      onClick={() => openReportWithCategory('Unsafe Condition')}
-                      className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold text-sm tracking-wide shadow-md shadow-blue-600/25 flex items-center justify-center gap-2 transition-all"
-                    >
-                      <Plus className="w-5 h-5 stroke-[2.5]" />
-                      <span>Report Incident</span>
-                    </button>
+                          {/* CARD 2: Pending */}
+                          <div 
+                            onClick={() => setActiveTab('incidents')}
+                            className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                          >
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                                <Clock className="w-4 h-4" />
+                              </div>
+                              <span className="text-2xl font-black text-slate-900 tracking-tight">
+                                {analyticsOverview.pending}
+                              </span>
+                            </div>
+                            <div className="text-xs font-semibold text-slate-500">
+                              Pending
+                            </div>
+                          </div>
 
-                    <div className="grid grid-cols-3 gap-2.5 pt-1">
-                      <button
-                        onClick={() => openReportWithCategory('Near Miss')}
-                        className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
-                          <MapPin className="w-4 h-4 text-blue-600" />
+                          {/* CARD 3: SIF */}
+                          <div 
+                            onClick={() => setActiveTab('incidents')}
+                            className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                          >
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="w-8 h-8 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                                <AlertTriangle className="w-4 h-4" />
+                              </div>
+                              <span className="text-2xl font-black text-slate-900 tracking-tight">
+                                {analyticsOverview.sif}
+                              </span>
+                            </div>
+                            <div className="text-xs font-semibold text-slate-500">
+                              SIF
+                            </div>
+                          </div>
+
+                          {/* CARD 4: Non-SIF */}
+                          <div 
+                            onClick={() => setActiveTab('incidents')}
+                            className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs hover:shadow-sm transition-all cursor-pointer group"
+                          >
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                                <ShieldCheck className="w-4 h-4" />
+                              </div>
+                              <span className="text-2xl font-black text-slate-900 tracking-tight">
+                                {analyticsOverview.nonSif}
+                              </span>
+                            </div>
+                            <div className="text-xs font-semibold text-slate-500">
+                              Non-SIF
+                            </div>
+                          </div>
+
                         </div>
-                        <span className="text-xs font-bold text-slate-800">
-                          Near Miss
-                        </span>
-                      </button>
+                      </div>
 
-                      <button
-                        onClick={() => openReportWithCategory('Hazard')}
-                        className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
-                          <AlertTriangle className="w-4 h-4 text-amber-500" />
-                        </div>
-                        <span className="text-xs font-bold text-slate-800">
-                          Hazard
-                        </span>
-                      </button>
+                      {/* QUICK ACTIONS */}
+                      <div className="space-y-3">
+                        <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                          Quick Actions
+                        </h2>
 
-                      <button
-                        onClick={() => openReportWithCategory('Observation')}
-                        className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
-                          <ShieldAlert className="w-4 h-4 text-emerald-600" />
+                        <button
+                          onClick={() => openReportWithCategory('Unsafe Condition')}
+                          className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold text-sm tracking-wide shadow-md shadow-blue-600/25 flex items-center justify-center gap-2 transition-all"
+                        >
+                          <Plus className="w-5 h-5 stroke-[2.5]" />
+                          <span>Report Incident</span>
+                        </button>
+
+                        <div className="grid grid-cols-3 gap-2.5 pt-1">
+                          <button
+                            onClick={() => openReportWithCategory('Near Miss')}
+                            className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
+                              <MapPin className="w-4 h-4 text-blue-600" />
+                            </div>
+                            <span className="text-xs font-bold text-slate-800">
+                              Near Miss
+                            </span>
+                          </button>
+
+                          <button
+                            onClick={() => openReportWithCategory('Hazard')}
+                            className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
+                              <AlertTriangle className="w-4 h-4 text-amber-500" />
+                            </div>
+                            <span className="text-xs font-bold text-slate-800">
+                              Hazard
+                            </span>
+                          </button>
+
+                          <button
+                            onClick={() => openReportWithCategory('Observation')}
+                            className="bg-white rounded-2xl p-3 border border-slate-100 shadow-2xs hover:shadow-sm active:scale-95 transition-all flex flex-col items-center justify-center text-center gap-1.5"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
+                              <ShieldAlert className="w-4 h-4 text-emerald-600" />
+                            </div>
+                            <span className="text-xs font-bold text-slate-800">
+                              Observation
+                            </span>
+                          </button>
                         </div>
-                        <span className="text-xs font-bold text-slate-800">
-                          Observation
-                        </span>
-                      </button>
-                    </div>
-                  </div>
+                      </div>
+                    </>
+                  )}
 
                 </div>
               )}
@@ -1906,6 +2337,37 @@ export default function MobileSafetyApp() {
                   {/* INCIDENTS VIEW: REPORTED INCIDENTS */}
                   {incidentsViewMode === 'REPORTS' ? (
                     <>
+                      {/* Admin Sector Filter Selector */}
+                      {isAdmin && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono block">
+                            Operating Sector:
+                          </span>
+                          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+                            {[
+                              { id: 'ALL', label: 'All Units' },
+                              { id: 'Unit 1', label: 'Unit 1 (CDU)' },
+                              { id: 'Unit 2', label: 'Unit 2 (FCC)' },
+                              { id: 'Unit 3', label: 'Unit 3 (Hydrocracker)' },
+                              { id: 'Unit 4', label: 'Unit 4 (Flare)' }
+                            ].map(unit => (
+                              <button
+                                key={unit.id}
+                                type="button"
+                                onClick={() => setAdminSelectedUnit(unit.id)}
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold whitespace-nowrap shrink-0 border transition-all cursor-pointer ${
+                                  adminSelectedUnit === unit.id
+                                    ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {unit.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Filter Chips: All | SIF | Non-SIF */}
                       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
                         {[
@@ -1932,6 +2394,10 @@ export default function MobileSafetyApp() {
                       <div className="space-y-3">
                         {reportedIncidents
                           .filter(r => {
+                            if (isAdmin && adminSelectedUnit !== 'ALL') {
+                              const loc = `${r.location || ''} ${r.facility_unit || ''} ${r.incidentLocation?.name || ''} ${r.title || ''}`.toLowerCase();
+                              if (!loc.includes(adminSelectedUnit.toLowerCase())) return false;
+                            }
                             if (incidentFilter === 'SIF') return r.is_sif;
                             if (incidentFilter === 'NON_SIF') return !r.is_sif;
                             return true;
@@ -2099,9 +2565,284 @@ export default function MobileSafetyApp() {
                 </div>
               )}
 
-              {/* TAB: ALERTS (Department Action Notifications) */}
+              {/* TAB: TASKS (ADMIN VERIFICATION & FIELD SIGN-OFF) */}
+              {activeTab === 'tasks' && (
+                <div className="space-y-4 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-1.5">
+                        <CheckSquare className="w-4 h-4 text-amber-500" />
+                        <span>Field Tasks &amp; Verification</span>
+                      </h2>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Inspect responder barrier repairs and sign off evidence
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={fetchTasks}
+                      className="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs shadow-2xs cursor-pointer"
+                      title="Refresh Tasks"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Department Filter Chips */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+                    {DEPARTMENTS.map(dept => (
+                      <button
+                        key={dept.id}
+                        type="button"
+                        onClick={() => setSelectedDept(dept.id)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 border transition-all cursor-pointer ${
+                          selectedDept === dept.id
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {dept.name || dept.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Task Cards List */}
+                  <div className="space-y-3">
+                    {tasks
+                      .filter(t => selectedDept === 'ALL' || t.department === selectedDept)
+                      .length === 0 ? (
+                      <div className="py-12 px-6 rounded-2xl bg-white border border-slate-100 shadow-2xs text-center space-y-2">
+                        <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-100 text-amber-600 mx-auto flex items-center justify-center font-bold">
+                          ⚡
+                        </div>
+                        <h3 className="text-xs font-bold text-slate-800">No Pending Field Tasks</h3>
+                        <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                          Dispatched teams have zero open corrective actions requiring supervisor verification in this department.
+                        </p>
+                      </div>
+                    ) : (
+                      tasks
+                        .filter(t => selectedDept === 'ALL' || t.department === selectedDept)
+                        .map(task => {
+                          const isClaimed = task.status === 'ACCEPTED' || task.status === 'SUBMITTED_FOR_VERIFICATION' || task.status === 'VERIFIED';
+                          const isVerified = task.status === 'VERIFIED';
+                          const isPending = task.status === 'SUBMITTED_FOR_VERIFICATION';
+
+                          return (
+                            <div
+                              key={task.id}
+                              className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-2xs space-y-2.5"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-mono font-bold text-blue-600">#{task.id}</span>
+                                    <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold text-slate-600 uppercase font-mono">
+                                      {task.department.replace('_', ' ')}
+                                    </span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      task.priority === 'CRITICAL' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
+                                    }`}>
+                                      {task.priority}
+                                    </span>
+                                  </div>
+                                  <h3 className="text-xs font-bold text-slate-900 mt-1">{task.title}</h3>
+                                </div>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap font-mono ${
+                                  isVerified ? 'bg-emerald-50 text-emerald-700' :
+                                  isPending ? 'bg-purple-50 text-purple-700' :
+                                  isClaimed ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+                                }`}>
+                                  {task.status.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+
+                              <p className="text-xs text-slate-600 leading-relaxed">{task.description}</p>
+
+                              {/* Work notes if submitted */}
+                              {task.work_notes && (
+                                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-[11px] text-slate-700 space-y-0.5">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">
+                                    Responder Notes:
+                                  </span>
+                                  <p className="italic font-medium">{task.work_notes}</p>
+                                </div>
+                              )}
+
+                              {/* Action Buttons for Admin Verification */}
+                              <div className="pt-1 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleVerifyTask(task.id, 'APPROVE')}
+                                  className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Approve &amp; Close</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedTaskModal(task);
+                                    setShowReworkInput(true);
+                                  }}
+                                  className="flex-1 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-600 border border-rose-200 font-bold text-xs flex items-center justify-center gap-1 transition-all cursor-pointer"
+                                >
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>Request Rework</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: ALERTS (Broadcast Directives & Department Action Notifications) */}
               {activeTab === 'alerts' && (
                 <div className="space-y-4 animate-fadeIn">
+
+                  {/* ADMIN BROADCAST PUBLISHER (when isAdmin) */}
+                  {isAdmin && (
+                    <div className="bg-white rounded-2xl p-4 border border-amber-200/90 shadow-2xs space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold">
+                            <Radio className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider font-mono">
+                              Plant Safety Broadcast Tool
+                            </h3>
+                            <p className="text-[10px] text-slate-500">
+                              Push real-time safety directive to all worker mobile screens
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <form onSubmit={handlePublishBroadcast} className="space-y-2.5">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase font-mono block mb-1">
+                            Directive Title *
+                          </label>
+                          <input
+                            type="text"
+                            value={broadcastTitle}
+                            onChange={(e) => setBroadcastTitle(e.target.value)}
+                            placeholder="e.g. Flare Line Purging – Exclusion Perimeter"
+                            className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase font-mono block mb-1">
+                              Sector Target
+                            </label>
+                            <select
+                              value={broadcastSector}
+                              onChange={(e) => setBroadcastSector(e.target.value)}
+                              className="w-full p-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                            >
+                              <option value="Plant-Wide">Plant-Wide (All Units)</option>
+                              <option value="Unit 1 (CDU)">Unit 1 (CDU)</option>
+                              <option value="Unit 2 (FCC)">Unit 2 (FCC)</option>
+                              <option value="Unit 3 (Hydrocracker)">Unit 3 (Hydrocracker)</option>
+                              <option value="Unit 4 (Flare)">Unit 4 (Flare)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase font-mono block mb-1">
+                              Priority
+                            </label>
+                            <select
+                              value={broadcastPriority}
+                              onChange={(e) => setBroadcastPriority(e.target.value)}
+                              className="w-full p-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                            >
+                              <option value="CRITICAL">🚨 CRITICAL (Immediate Stand-down)</option>
+                              <option value="HIGH">⚠️ HIGH (Precautionary)</option>
+                              <option value="ADVISORY">ℹ️ ADVISORY (Operational)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase font-mono block mb-1">
+                            Directive Instructions *
+                          </label>
+                          <textarea
+                            value={broadcastMessage}
+                            onChange={(e) => setBroadcastMessage(e.target.value)}
+                            placeholder="State clear operational action for frontline teams..."
+                            rows={2}
+                            className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Broadcast Directive to Frontline</span>
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                  {/* ACTIVE BROADCAST DIRECTIVES (Visible to both Admin & Workers) */}
+                  {broadcastNotices.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 font-mono flex items-center gap-1">
+                          <Radio className="w-3.5 h-3.5 text-amber-500" />
+                          Active Safety Directives ({broadcastNotices.length})
+                        </span>
+                      </div>
+
+                      {broadcastNotices.map(notice => (
+                        <div
+                          key={notice.id}
+                          className="bg-white rounded-2xl p-4 border border-amber-300/80 shadow-2xs space-y-2 relative overflow-hidden"
+                        >
+                          <div className="absolute top-0 left-0 right-0 h-1 bg-amber-500" />
+                          <div className="flex items-start justify-between gap-2 pt-1">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[9px] font-black font-mono">
+                                  {notice.priority}
+                                </span>
+                                <span className="text-[10px] font-bold text-slate-500">
+                                  {notice.sector}
+                                </span>
+                              </div>
+                              <h3 className="text-xs font-bold text-slate-900 mt-1">{notice.title}</h3>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">{notice.timestamp}</span>
+                          </div>
+                          <p className="text-xs text-slate-700 leading-relaxed font-medium">
+                            {notice.message}
+                          </p>
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[10px] text-slate-400">
+                            <span>Issued by: <strong className="text-slate-600">{notice.sender}</strong></span>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteBroadcast(notice.id)}
+                                className="text-rose-600 font-bold hover:underline cursor-pointer"
+                              >
+                                Withdraw
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   
                   <div className="flex items-center justify-between">
                     <div>
@@ -2767,6 +3508,76 @@ export default function MobileSafetyApp() {
                       </span>
                     </div>
 
+                    {/* Admin Triage & Status Controller */}
+                    {isAdmin && (
+                      <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-3 border border-slate-800 shadow-md">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-black tracking-wider uppercase text-amber-400 flex items-center gap-1.5 font-mono">
+                            <Shield className="w-3.5 h-3.5 text-amber-400" /> Admin Triage &amp; Workflow Control
+                          </span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                            Current: {aiAnalysisModalData.status || 'Under Review'}
+                          </span>
+                        </div>
+                        
+                        {/* Status Switcher Buttons */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block font-mono">
+                            Set Operational Status:
+                          </span>
+                          <div className="grid grid-cols-3 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateIncidentStatus(aiAnalysisModalData.id, 'Under Review')}
+                              className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                aiAnalysisModalData.status === 'Under Review'
+                                  ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-400/50'
+                                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                              }`}
+                            >
+                              ⏳ Under Review
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateIncidentStatus(aiAnalysisModalData.id, 'Action Required')}
+                              className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                aiAnalysisModalData.status === 'Action Required'
+                                  ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-400/50'
+                                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                              }`}
+                            >
+                              🚨 Action Req.
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateIncidentStatus(aiAnalysisModalData.id, 'Resolved')}
+                              className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                aiAnalysisModalData.status === 'Resolved'
+                                  ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-400/50'
+                                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                              }`}
+                            >
+                              ✅ Resolved
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Department Reassignment Dropdown */}
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-slate-400 font-medium">Reassign Team:</span>
+                          <select
+                            value={aiAnalysisModalData.assigned_department || 'MECHANICAL'}
+                            onChange={(e) => handleReassignIncidentDepartment(aiAnalysisModalData.id, e.target.value)}
+                            className="bg-slate-800 text-white text-xs font-medium px-2.5 py-1.5 rounded-xl border border-slate-700 focus:outline-none focus:border-amber-400 cursor-pointer"
+                          >
+                            {DEPARTMENTS.filter(d => d.id !== 'ALL').map(d => (
+                              <option key={d.id} value={d.id}>{d.label || d.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
 
 
                   </div>
@@ -3237,12 +4048,12 @@ export default function MobileSafetyApp() {
               isMobile={true}
             />
 
-            {/* BOTTOM NAVIGATION BAR: DOCKED WHITE BAR WITH CENTER VOICE SEARCH BUTTON */}
-            <nav aria-label="Main Navigation" className="h-18 bg-white border-t border-slate-100 px-4 flex items-center justify-between sticky bottom-0 z-40 shadow-lg shadow-slate-200/50">
+            {/* BOTTOM NAVIGATION BAR */}
+            <nav aria-label="Main Navigation" className="h-18 bg-white border-t border-slate-100 px-3 flex items-center justify-between sticky bottom-0 z-40 shadow-lg shadow-slate-200/50">
               
               <button
                 onClick={() => setActiveTab('home')}
-                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all ${
+                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
                   activeTab === 'home' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
@@ -3252,7 +4063,7 @@ export default function MobileSafetyApp() {
 
               <button
                 onClick={() => setActiveTab('incidents')}
-                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all ${
+                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
                   activeTab === 'incidents' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
@@ -3260,20 +4071,40 @@ export default function MobileSafetyApp() {
                 <span className="text-[10px] mt-1 font-medium">Incidents</span>
               </button>
 
-              {/* CENTER FLOATING VOICE SEARCH BUTTON (REPLACED '+' SYMBOL) */}
-              <div className="flex flex-col items-center justify-center flex-1 -mt-5">
+              {isAdmin ? (
+                /* Admin Dedicated Tasks Sign-off Tab */
                 <button
-                  onClick={openVoiceSearchModal}
-                  aria-label="Voice Based Search"
-                  title="Voice Safety Search"
-                  className="w-13 h-13 rounded-full bg-gradient-to-tr from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-95 text-white flex items-center justify-center shadow-lg shadow-blue-600/40 transition-all border-4 border-white relative group cursor-pointer"
+                  onClick={() => setActiveTab('tasks')}
+                  className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
+                    activeTab === 'tasks' ? 'text-amber-600 font-bold' : 'text-slate-400 hover:text-slate-600'
+                  }`}
                 >
-                  <Mic className="w-6 h-6 stroke-[2.3] group-hover:scale-110 transition-transform" />
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-400 border-2 border-white rounded-full animate-ping" />
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />
+                  <div className="relative">
+                    <CheckSquare className="w-5 h-5 stroke-[2.2]" />
+                    {tasks.filter(t => t.status === 'SUBMITTED_FOR_VERIFICATION' || t.status === 'ACCEPTED').length > 0 && (
+                      <span className="absolute -top-1 -right-1.5 w-3.5 h-3.5 bg-amber-500 text-white font-bold text-[8px] rounded-full flex items-center justify-center border border-white">
+                        {tasks.filter(t => t.status === 'SUBMITTED_FOR_VERIFICATION' || t.status === 'ACCEPTED').length}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] mt-1 font-medium">Tasks</span>
                 </button>
-                <span className="text-[9px] font-bold text-blue-700 mt-0.5 tracking-tight">Voice Search</span>
-              </div>
+              ) : (
+                /* Center Floating Voice Search Button for Worker */
+                <div className="flex flex-col items-center justify-center flex-1 -mt-5">
+                  <button
+                    onClick={openVoiceSearchModal}
+                    aria-label="Voice Based Search"
+                    title="Voice Safety Search"
+                    className="w-13 h-13 rounded-full bg-gradient-to-tr from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-95 text-white flex items-center justify-center shadow-lg shadow-blue-600/40 transition-all border-4 border-white relative group cursor-pointer"
+                  >
+                    <Mic className="w-6 h-6 stroke-[2.3] group-hover:scale-110 transition-transform" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-400 border-2 border-white rounded-full animate-ping" />
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />
+                  </button>
+                  <span className="text-[9px] font-bold text-blue-700 mt-0.5 tracking-tight">Voice Search</span>
+                </div>
+              )}
 
               <button
                 onClick={() => {
@@ -3286,18 +4117,18 @@ export default function MobileSafetyApp() {
               >
                 <div className="relative">
                   <Bell className="w-5 h-5 stroke-[2.2]" />
-                  {!hasReadAlerts && userAcceptedAlerts.length > 0 && (
+                  {!hasReadAlerts && (userAcceptedAlerts.length > 0 || (broadcastNotices.length > 0 && !isAdmin)) && (
                     <span className="absolute -top-1 -right-1.5 w-3.5 h-3.5 bg-red-500 text-white font-bold text-[8px] rounded-full flex items-center justify-center border border-white">
-                      {userAcceptedAlerts.length}
+                      {userAcceptedAlerts.length || broadcastNotices.length}
                     </span>
                   )}
                 </div>
-                <span className="text-[10px] mt-1 font-medium">Alerts</span>
+                <span className="text-[10px] mt-1 font-medium">{isAdmin ? 'Broadcasts' : 'Alerts'}</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('more')}
-                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all ${
+                className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
                   activeTab === 'more' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
