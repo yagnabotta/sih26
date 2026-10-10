@@ -3292,8 +3292,8 @@ export default function MobileSafetyApp() {
                   activeTab === 'more' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
-                <MoreHorizontal className="w-5 h-5 stroke-[2.2]" />
-                <span className="text-[10px] mt-1 font-medium">More</span>
+                <User className="w-5 h-5 stroke-[2.2]" />
+                <span className="text-[10px] mt-1 font-medium">Profile</span>
               </button>
 
             </nav>
