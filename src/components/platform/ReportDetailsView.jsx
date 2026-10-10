@@ -23,11 +23,14 @@ import {
   Info
 } from 'lucide-react';
 import { api } from '../../services/api';
+import IncidentPostAnalysisMap from './maps/IncidentPostAnalysisMap';
+import AdminNavigationModal from './maps/AdminNavigationModal';
 
 export default function ReportDetailsView({ reportId, onBack }) {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showAdminNavModal, setShowAdminNavModal] = useState(false);
   
   // Feedback state
   const [feedbackStatus, setFeedbackStatus] = useState('CORRECT');
@@ -176,6 +179,15 @@ export default function ReportDetailsView({ reportId, onBack }) {
     barrierFailureMode = 'Barrier was in place; mitigative control reduced injury severity';
   }
 
+  const riskScore = analysis?.risk_score || (isSifYes ? 85 : 25);
+  const riskLevel = riskScore > 66 ? 'High Risk' : riskScore >= 33 ? 'Medium Risk' : 'Low Risk';
+  const incidentLocation = {
+    latitude: report.incident_latitude || 12.9716,
+    longitude: report.incident_longitude || 77.5946,
+    name: report.incident_location_name || report.location || 'Industrial Unit',
+    address: report.incident_address || `${report.incident_location_name || report.location} Operating Area`
+  };
+
   return (
     <div className="p-6 sm:p-8 max-w-5xl mx-auto space-y-6 bg-[#F8FAFC]">
       
@@ -246,6 +258,19 @@ export default function ReportDetailsView({ reportId, onBack }) {
           <p className="text-xs text-slate-800 bg-slate-50/80 p-4 rounded-xl border border-slate-200 leading-relaxed">
             {report.description}
           </p>
+        </div>
+
+        {/* Incident Location Map & Admin Navigation (Requirement 8) */}
+        <div className="pt-2">
+          <IncidentPostAnalysisMap
+            incidentLocation={incidentLocation}
+            riskScore={riskScore}
+            riskLevel={riskLevel}
+            incidentType={report.report_type?.replace('_', ' ') || 'Incident'}
+            reportName={report.report_reference}
+            onNavigate={() => setShowAdminNavModal(true)}
+            isAdmin={true}
+          />
         </div>
 
         {/* Structured Understanding Grid */}
@@ -562,6 +587,16 @@ export default function ReportDetailsView({ reportId, onBack }) {
         )}
 
       </div>
+
+      {/* Admin Navigation Modal */}
+      <AdminNavigationModal
+        isOpen={showAdminNavModal}
+        onClose={() => setShowAdminNavModal(false)}
+        incidentLocation={incidentLocation}
+        riskScore={riskScore}
+        riskLevel={riskLevel}
+        incidentType={report.report_type?.replace('_', ' ') || 'Incident'}
+      />
 
     </div>
   );

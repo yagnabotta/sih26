@@ -12,8 +12,12 @@ class User(Base):
     password = Column(String(200), nullable=False) # In production we hash; matching simple auth credentials
     full_name = Column(String(100), default="Safety Officer")
     role = Column(String(50), default="HSE_OFFICER")
+    phone = Column(String(50), nullable=True)
+    status = Column(String(50), default="ACTIVE", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="users")
     safety_reports = relationship("SafetyReport", back_populates="user")
     feedbacks = relationship("Feedback", back_populates="user")
+    reported_incidents = relationship("Incident", back_populates="reporter", foreign_keys="Incident.reported_by_id")
+    notifications = relationship("EmergencyNotification", back_populates="user")

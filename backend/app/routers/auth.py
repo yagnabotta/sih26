@@ -1,155 +1,154 @@
-import jwt
-from datetime import datetime, timedelta, timezone
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.organization import Organization
 from ..models.user import User
-from ..schemas.auth import LoginRequest, TokenResponse, UserResponse
+from ..schemas.auth import (
+    LoginRequest,
+    UserRegisterRequest,
+    TokenResponse,
+    UserResponse,
+    LogoutResponse,
+    normalize_role,
+    get_role_permissions
+)
+from ..services.auth_security import hash_password, verify_password, create_access_token
 from ..dependencies import get_current_user
-from ..config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+root_auth_router = APIRouter(prefix="/auth", tags=["Authentication (Direct)"])
 
-# Predefined 5 Organizations
-PRESET_ORGS = [
-    {"id": "id001", "name": "Oil India Limited – Operational Safety Unit"},
-    {"id": "id002", "name": "Offshore Rig Operations & Drilling Division"},
-    {"id": "id003", "name": "Refinery & Petrochemical Processing Center"},
-    {"id": "id004", "name": "Exploration & Production Field Command"},
-    {"id": "id005", "name": "Cross-Country Gas Transmission & Integrity"},
-]
-
-# Predefined Admin and Normal User accounts
-PRESET_USERS = [
-    # Administrator accounts (Full privileges, audit, lock, static data reset)
-    {"org_id": "id001", "email": "admin1@gmail.com", "pass": "Admin1@123", "officer": "Chief HSE Administrator", "role": "ADMINISTRATOR"},
-    {"org_id": "id002", "email": "admin2@gmail.com", "pass": "Admin2@123", "officer": "HSE Lead Officer 02", "role": "ADMINISTRATOR"},
-    {"org_id": "id003", "email": "admin3@gmail.com", "pass": "Admin3@123", "officer": "HSE Lead Officer 03", "role": "ADMINISTRATOR"},
-    {"org_id": "id004", "email": "admin4@gmail.com", "pass": "Admin4@123", "officer": "HSE Lead Officer 04", "role": "ADMINISTRATOR"},
-    {"org_id": "id005", "email": "admin5@gmail.com", "pass": "Admin5@123", "officer": "HSE Lead Officer 05", "role": "ADMINISTRATOR"},
-
-    # Normal User accounts (Field safety operators, incident reporting, view telemetry)
-    {"org_id": "id001", "email": "user1@gmail.com", "pass": "User1@123", "officer": "Field Safety Operator", "role": "NORMAL_USER"},
-    {"org_id": "id002", "email": "user2@gmail.com", "pass": "User2@123", "officer": "Field Safety Specialist", "role": "NORMAL_USER"},
-    {"org_id": "id003", "email": "user3@gmail.com", "pass": "User3@123", "officer": "Plant Safety Technician", "role": "NORMAL_USER"},
-    {"org_id": "id004", "email": "user4@gmail.com", "pass": "User4@123", "officer": "Field Inspection Officer", "role": "NORMAL_USER"},
-    {"org_id": "id005", "email": "user5@gmail.com", "pass": "User5@123", "officer": "Pipeline Safety Monitor", "role": "NORMAL_USER"},
-]
-
-def ensure_initial_seed(db: Session):
-    """Ensures authorized organizations, admin accounts, and normal user accounts exist in the DB."""
-    for org_info in PRESET_ORGS:
-        org = db.query(Organization).filter(Organization.id == org_info["id"]).first()
-        if not org:
-            org = Organization(id=org_info["id"], name=org_info["name"])
-            db.add(org)
-            db.commit()
-            db.refresh(org)
-        elif org.name != org_info["name"]:
-            org.name = org_info["name"]
-            db.commit()
-    
-    for u_info in PRESET_USERS:
-        user = db.query(User).filter(User.email == u_info["email"]).first()
-        if not user:
-            user = User(
-                organization_id=u_info["org_id"],
-                email=u_info["email"],
-                password=u_info["pass"],
-                full_name=u_info["officer"],
-                role=u_info["role"]
-            )
-            db.add(user)
-            db.commit()
-        else:
-            # Sync password and role in case DB existed previously
-            user.password = u_info["pass"]
-            user.role = u_info["role"]
-            user.full_name = u_info["officer"]
-            user.organization_id = u_info["org_id"]
-            db.commit()
-
-def calculate_role_info(role: str, email: str):
-    is_normal = role == "NORMAL_USER" or "user" in email.lower()
-    is_admin = not is_normal and (
-        role in ["ADMINISTRATOR", "CHIEF_HSE_AUDITOR"] or 
-        "admin" in email.lower()
+def build_user_response(user: User) -> UserResponse:
+    norm_role = normalize_role(user.role)
+    is_admin = norm_role == "ADMIN"
+    is_responder = norm_role == "RESPONDER"
+    role_names = {
+        "ADMIN": "Administrator (EOC Command)",
+        "RESPONDER": "Emergency Responder",
+        "USER": "Citizen / User"
+    }
+    return UserResponse(
+        id=user.id,
+        organization_id=user.organization_id,
+        email=user.email,
+        full_name=user.full_name,
+        role=norm_role,
+        phone=getattr(user, "phone", None),
+        status=getattr(user, "status", "ACTIVE"),
+        is_admin=is_admin,
+        is_responder=is_responder,
+        role_name=role_names.get(norm_role, "Citizen / User"),
+        permissions=get_role_permissions(norm_role),
+        organization_name=user.organization.name if user.organization else "Emergency Response Network"
     )
-    role_name = "Administrator" if is_admin else "Normal User"
-    permissions = (
-        ["ALL", "MANAGE_USERS", "SETTINGS", "REPORTS_EDIT", "AUDIT", "VIEW_DASHBOARD", "RESET_DATA", "UPDATE_PRECURSOR_STATUS"]
-        if is_admin else
-        ["VIEW_DASHBOARD", "SUBMIT_OBSERVATION", "VIEW_REPORTS", "VIEW_SIGNALS"]
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@root_auth_router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserRegisterRequest, db: Session = Depends(get_db)):
+    """
+    Registers a new user account.
+    Public registration defaults to standard citizen USER role.
+    """
+    clean_email = payload.email.strip().lower()
+    clean_org = (payload.organization_id or "org-emergency-01").strip().lower()
+
+    # Check existing email
+    existing_user = db.query(User).filter(User.email == clean_email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An account with email '{clean_email}' already exists."
+        )
+
+    # Enforce role safety: public registration cannot create unrestricted ADMIN accounts
+    requested_role = normalize_role(payload.role)
+    if requested_role in ["ADMIN", "RESPONDER"] and not clean_email.endswith("@emergency.com"):
+        # Safe default to citizen USER
+        requested_role = "USER"
+
+    # Ensure organization exists
+    org = db.query(Organization).filter(Organization.id == clean_org).first()
+    if not org:
+        org = Organization(
+            id=clean_org,
+            name="Emergency Response & Safety Platform",
+            sector="Public Safety & Municipal Services"
+        )
+        db.add(org)
+        db.commit()
+
+    # Hash password securely
+    secure_hash = hash_password(payload.password)
+
+    new_user = User(
+        organization_id=clean_org,
+        email=clean_email,
+        password=secure_hash,
+        full_name=payload.full_name.strip(),
+        role=requested_role,
+        phone=payload.phone.strip() if payload.phone else None,
+        status="ACTIVE"
     )
-    return is_admin, role_name, permissions
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    user_resp = build_user_response(new_user)
+    token = create_access_token({
+        "sub": str(new_user.id),
+        "email": new_user.email,
+        "role": user_resp.role,
+        "is_admin": user_resp.is_admin,
+        "org_id": new_user.organization_id
+    })
+
+    return TokenResponse(access_token=token, token_type="bearer", user=user_resp)
 
 @router.post("/login", response_model=TokenResponse)
+@root_auth_router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    ensure_initial_seed(db)
-    
-    org_id_clean = payload.org_id.strip().lower()
-    email_clean = payload.email.strip().lower()
-    
-    user = db.query(User).filter(
-        User.organization_id == org_id_clean,
-        User.email == email_clean
-    ).first()
+    """
+    Authenticates user with email and password.
+    Returns JWT bearer token and verified user profile.
+    """
+    clean_email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == clean_email).first()
 
-    # Fallback match by email directly if org_id matches user's org
-    if not user:
-        candidate = db.query(User).filter(User.email == email_clean).first()
-        if candidate and (candidate.organization_id.lower() == org_id_clean or org_id_clean in ["id001", "oil india limited"]):
-            user = candidate
-
-    if not user or user.password != payload.password.strip():
+    if not user or not verify_password(payload.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Organization ID, Email, or Password."
+            detail="Invalid email or password."
         )
 
-    is_admin, role_name, permissions = calculate_role_info(user.role, user.email)
+    # Transparently upgrade legacy plaintext password to secure PBKDF2 hash on successful login
+    if not user.password.startswith("pbkdf2:"):
+        user.password = hash_password(payload.password)
+        db.commit()
 
-    # Issue JWT token containing verified user ID and organization ID
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    token_claims = {
+    user_resp = build_user_response(user)
+    token = create_access_token({
         "sub": str(user.id),
-        "org_id": user.organization_id,
         "email": user.email,
-        "role": user.role,
-        "is_admin": is_admin,
-        "exp": expire
-    }
-    encoded_jwt = jwt.encode(token_claims, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        "role": user_resp.role,
+        "is_admin": user_resp.is_admin,
+        "org_id": user.organization_id
+    })
 
-    return TokenResponse(
-        access_token=encoded_jwt,
-        token_type="bearer",
-        user=UserResponse(
-            id=user.id,
-            organization_id=user.organization_id,
-            email=user.email,
-            full_name=user.full_name,
-            role=user.role,
-            is_admin=is_admin,
-            role_name=role_name,
-            permissions=permissions,
-            organization_name=user.organization.name if user.organization else None
-        )
-    )
+    return TokenResponse(access_token=token, token_type="bearer", user=user_resp)
 
 @router.get("/me", response_model=UserResponse)
+@root_auth_router.get("/me", response_model=UserResponse)
 def get_profile(current_user: User = Depends(get_current_user)):
-    is_admin, role_name, permissions = calculate_role_info(current_user.role, current_user.email)
-    return UserResponse(
-        id=current_user.id,
-        organization_id=current_user.organization_id,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        role=current_user.role,
-        is_admin=is_admin,
-        role_name=role_name,
-        permissions=permissions,
-        organization_name=current_user.organization.name if current_user.organization else None
-    )
+    """
+    Retrieves current authenticated user profile and permissions.
+    """
+    return build_user_response(current_user)
 
+@router.post("/logout", response_model=LogoutResponse)
+@root_auth_router.post("/logout", response_model=LogoutResponse)
+def logout():
+    """
+    Logs out current session. Client should clear local token.
+    """
+    return LogoutResponse(status="success", message="Logged out successfully.")

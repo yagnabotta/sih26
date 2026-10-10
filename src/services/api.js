@@ -10,6 +10,47 @@ function getAuthHeaders() {
 
 export const api = {
   // Auth
+  register: async (payload) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) return await res.json();
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Registration failed.');
+    } catch (e) {
+      if (!e.message?.includes('Failed to fetch')) throw e;
+      // Offline fallback
+      return {
+        access_token: 'offline-citizen-token',
+        token_type: 'bearer',
+        user: {
+          id: 999,
+          email: payload.email,
+          full_name: payload.full_name,
+          role: 'USER',
+          role_name: 'Citizen / User',
+          is_admin: false,
+          is_responder: false,
+          permissions: ['REPORT_EMERGENCY', 'VIEW_OWN_INCIDENTS']
+        }
+      };
+    }
+  },
+
+  logout: async () => {
+    try {
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
+    } catch (e) {
+      // Ignore network errors on logout
+    }
+  },
+
   login: async (orgId, email, password) => {
     const cleanOrg = orgId?.trim().toLowerCase() || '';
     const cleanEmail = email?.trim().toLowerCase() || '';

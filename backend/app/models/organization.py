@@ -15,3 +15,4 @@ class Organization(Base):
     safety_reports = relationship("SafetyReport", back_populates="organization", cascade="all, delete-orphan")
     sif_findings = relationship("SIFFinding", back_populates="organization", cascade="all, delete-orphan")
     weak_signal_reviews = relationship("WeakSignalReview", back_populates="organization", cascade="all, delete-orphan")
+    weak_signals = relationship("WeakSignal", back_populates="organization", cascade="all, delete-orphan")

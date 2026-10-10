@@ -23,8 +23,14 @@ export function AuthProvider({ children }) {
 
   const [loading, setLoading] = useState(true);
 
+  // Compute normalized role flags
+  const rawRole = (user?.role || '').toUpperCase();
+  const isAdmin = rawRole === 'ADMIN' || rawRole === 'ADMINISTRATOR' || !!user?.is_admin;
+  const isResponder = rawRole === 'RESPONDER' || rawRole === 'HSE_OFFICER' || !!user?.is_responder;
+  const isCitizen = !isAdmin && !isResponder;
+  const activeRole = isAdmin ? 'ADMIN' : isResponder ? 'RESPONDER' : 'USER';
+
   useEffect(() => {
-    // Safety timer ensures loading is never stuck
     const safetyTimer = setTimeout(() => {
       setLoading(false);
     }, 400);
@@ -41,7 +47,6 @@ export function AuthProvider({ children }) {
             setToken(storedToken);
             setLoading(false);
 
-            // Fetch latest profile in background without blocking screen render
             api.getProfile()
               .then(freshUser => {
                 if (freshUser) {
@@ -74,8 +79,30 @@ export function AuthProvider({ children }) {
     return () => clearTimeout(safetyTimer);
   }, []);
 
-  const login = async (orgId, email, password) => {
-    const data = await api.login(orgId, email, password);
+  const login = async (emailOrOrg, maybeEmail, maybePassword) => {
+    let orgId = '';
+    let email = '';
+    let password = '';
+
+    if (maybePassword !== undefined) {
+      orgId = emailOrOrg;
+      email = maybeEmail;
+      password = maybePassword;
+    } else {
+      email = emailOrOrg;
+      password = maybeEmail;
+    }
+
+    const data = await api.login(email, password, orgId);
+    localStorage.setItem('safetyai_token', data.access_token);
+    localStorage.setItem('safetyai_user', JSON.stringify(data.user));
+    setToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
+  const register = async (registerPayload) => {
+    const data = await api.register(registerPayload);
     localStorage.setItem('safetyai_token', data.access_token);
     localStorage.setItem('safetyai_user', JSON.stringify(data.user));
     setToken(data.access_token);
@@ -84,6 +111,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    api.logout().catch(() => {});
     localStorage.removeItem('safetyai_token');
     localStorage.removeItem('safetyai_user');
     setUser(null);
@@ -103,7 +131,20 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, isAuthenticated: !!user, login, logout, updateUser, loading }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      token, 
+      isAuthenticated: !!user, 
+      role: activeRole,
+      isAdmin, 
+      isResponder, 
+      isCitizen, 
+      login, 
+      register, 
+      logout, 
+      updateUser, 
+      loading 
+    }}>
       {children}
     </AuthContext.Provider>
   );

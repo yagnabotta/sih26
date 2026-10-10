@@ -31,4 +31,5 @@ __pycache__/
 *.sqlite3
 .env
 *random_forest.joblib
+sih26/
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Shield, 
   ArrowLeft, 
@@ -11,537 +11,333 @@ import {
   Building2,
   Lock,
   Mail,
-  Info,
   User,
-  UserCheck,
-  KeyRound,
-  Check,
-  Sparkles
+  Phone,
+  Radio,
+  Ambulance,
+  Flame,
+  Check
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-// Preset credentials for both Administrator and Normal User
+// Preset credentials for Citizen, Responder, and Admin
 const PRESET_ACCOUNTS = {
   admin: {
     key: 'admin',
-    roleLabel: 'Administrator',
-    title: 'Chief HSE Administrator',
-    badge: 'Full Admin Privileges',
-    email: 'admin1@gmail.com',
-    password: 'Admin1@123',
-    orgId: 'id001',
-    orgName: 'Oil India Limited – Operational Safety Unit',
-    accessSummary: 'Full administrative control, batch AI ingestion, audit logs, and system configuration.',
+    roleLabel: 'Admin (EOC)',
+    title: 'EOC Operations Director',
+    badge: 'Operations Command',
+    email: 'admin@emergency.com',
+    password: 'AdminPassword123!',
+    orgId: 'org-emergency-01',
+    accessSummary: 'Full administrative control, incident dispatch, responder assignment, escalation & analytics.',
     accentColor: 'amber'
   },
-  normal: {
-    key: 'normal',
-    roleLabel: 'Normal User',
-    title: 'Field Safety Operator',
-    badge: 'Standard Operations',
-    email: 'user1@gmail.com',
-    password: 'User1@123',
-    orgId: 'id001',
-    orgName: 'Oil India Limited – Field Operations',
-    accessSummary: 'Plant safety monitoring, incident submission, precursor telemetry, and signal review.',
+  responder: {
+    key: 'responder',
+    roleLabel: 'Responder',
+    title: 'Emergency Unit Captain',
+    badge: 'Field Response Unit',
+    email: 'responder@emergency.com',
+    password: 'ResponderPassword123!',
+    orgId: 'org-emergency-01',
+    accessSummary: 'Incoming dispatch alerts, route navigation HUD, status updates (en route, arrived, resolved).',
+    accentColor: 'emerald'
+  },
+  user: {
+    key: 'user',
+    roleLabel: 'Citizen',
+    title: 'Citizen Reporter',
+    badge: 'Standard Citizen',
+    email: 'user@emergency.com',
+    password: 'UserPassword123!',
+    orgId: 'org-emergency-01',
+    accessSummary: 'Quick emergency reporting, GPS location confirmation, live status tracking & personal incident history.',
     accentColor: 'sky'
   }
 };
 
 export default function LoginModal({ isOpen, onClose, onLoginSuccess }) {
-  const { login } = useAuth();
+  const { login, register } = useAuth();
   
-  // Active role tab: 'admin' or 'normal'
-  const [activeRole, setActiveRole] = useState('admin');
+  // Active mode: 'login' or 'register'
+  const [mode, setMode] = useState('login');
+  
+  // Active role tab for 1-click test fill: 'admin', 'responder', 'user'
+  const [activeRole, setActiveRole] = useState('user');
   
   // Form fields
-  const [orgId, setOrgId] = useState('id001');
-  const [email, setEmail] = useState('admin1@gmail.com');
-  const [password, setPassword] = useState('Admin1@123');
+  const [email, setEmail] = useState('user@emergency.com');
+  const [password, setPassword] = useState('UserPassword123!');
+  const [fullName, setFullName] = useState('Jane Citizen');
+  const [phone, setPhone] = useState('+91-98765-43210');
+  
+  // UI states
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(() => {
-    return localStorage.getItem('safetyai_remember_me') !== 'false';
-  });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [forgotPasswordNotice, setForgotPasswordNotice] = useState(false);
-
-  // Clear messages & sync fields whenever modal opens
-  useEffect(() => {
-    if (isOpen) {
-      setErrorMessage('');
-      setForgotPasswordNotice(false);
-      setIsSuccess(false);
-    }
-  }, [isOpen]);
-
-  // Switch role handler: autofills matching credentials
-  const handleSelectRole = (roleKey) => {
-    setActiveRole(roleKey);
-    const target = PRESET_ACCOUNTS[roleKey];
-    setOrgId(target.orgId);
-    setEmail(target.email);
-    setPassword(target.password);
-    setErrorMessage('');
-    setForgotPasswordNotice(false);
-  };
+  const [successMessage, setSuccessMessage] = useState('');
 
   if (!isOpen) return null;
 
+  const handleSelectRole = (roleKey) => {
+    setActiveRole(roleKey);
+    const preset = PRESET_ACCOUNTS[roleKey];
+    if (preset) {
+      setEmail(preset.email);
+      setPassword(preset.password);
+      setErrorMessage('');
+      setSuccessMessage('');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
     setErrorMessage('');
-    setForgotPasswordNotice(false);
-
-    const cleanOrg = orgId.trim() || 'id001';
-    const cleanEmail = email.trim();
-    const cleanPassword = password.trim();
-
-    if (!cleanEmail || !cleanPassword) {
-      setErrorMessage('Please enter both Email and Password.');
-      return;
-    }
-
-    setIsSubmitting(true);
+    setSuccessMessage('');
 
     try {
-      // Execute login via AuthContext / Backend API
-      await login(cleanOrg, cleanEmail, cleanPassword);
-
-      // Handle Remember Me preference
-      if (rememberMe) {
-        localStorage.setItem('safetyai_remembered_role', activeRole);
-        localStorage.setItem('safetyai_remember_me', 'true');
+      if (mode === 'register') {
+        if (!fullName.trim() || !email.trim() || !password.trim()) {
+          throw new Error('Please fill in all required fields.');
+        }
+        await register({
+          email: email.trim(),
+          password: password.trim(),
+          full_name: fullName.trim(),
+          phone: phone.trim() || undefined,
+          role: 'USER'
+        });
+        setSuccessMessage('Registration successful! Redirecting...');
       } else {
-        localStorage.removeItem('safetyai_remembered_role');
-        localStorage.setItem('safetyai_remember_me', 'false');
+        await login(email.trim(), password.trim());
+        setSuccessMessage('Authentication successful! Welcome to the Emergency Platform.');
       }
 
-      setIsSubmitting(false);
-      setIsSuccess(true);
-
-      // Transition to Dashboard
       setTimeout(() => {
-        setIsSuccess(false);
-        if (onClose) onClose();
         if (onLoginSuccess) onLoginSuccess();
-      }, 700);
-
+        if (onClose) onClose();
+      }, 500);
     } catch (err) {
-      setIsSubmitting(false);
-      setErrorMessage(err.message || 'Invalid Organization ID, Email, or Password.');
+      setErrorMessage(err.message || 'Authentication failed. Please verify credentials.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-white dark:bg-[#09090b] overflow-y-auto lg:overflow-hidden animate-in fade-in duration-300 flex flex-col lg:flex-row select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
       
-      {/* ================= LEFT HALF: BRIGHT CLEAR IMAGE WITH ACCESSIBLE BADGE ================= */}
-      <div className="relative w-full lg:w-1/2 min-h-[360px] lg:min-h-screen bg-[#09090b] overflow-hidden flex flex-col justify-between p-6 sm:p-10 lg:p-14">
+      <div className="relative w-full max-w-lg bg-white dark:bg-[#0E1526] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto">
         
-        {/* Background Image */}
-        <div className="absolute inset-0 z-0">
-          <img
-            src="/assets/images/pic-5.jpg"
-            alt="Safety First Petroleum Engineer"
-            className="w-full h-full object-cover object-center transform scale-100 filter brightness-100 contrast-100"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/20 z-10" />
-        </div>
-
-        {/* Top Left: Logo Badge */}
-        <div className="relative z-20">
+        {/* Top Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-orange-500/30">
+              <ShieldCheck className="w-5 h-5 stroke-[2.5]" />
+            </div>
+            <div>
+              <h2 className="text-lg font-black text-slate-900 dark:text-white font-heading">
+                Emergency Response <span className="text-orange-500">Platform</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Secure Hyperlocal Access & Role Authentication
+              </p>
+            </div>
+          </div>
           <button
-            type="button"
             onClick={onClose}
-            title="Click to go to main website"
-            className="inline-flex items-center gap-2.5 px-4 py-2 rounded-xl bg-black/60 hover:bg-black/85 backdrop-blur-md border border-white/30 hover:border-amber-400 text-white shadow-xl transition-all duration-200 cursor-pointer hover:scale-105 active:scale-95 group"
+            className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center transition-colors cursor-pointer"
           >
-            <Shield className="w-4 h-4 text-amber-400 fill-amber-400/20 group-hover:rotate-12 transition-transform duration-200" />
-            <span className="text-sm font-black font-heading tracking-wide">SafetyAI</span>
-            <span className="text-[11px] text-slate-300 font-mono pl-2 border-l border-white/20 group-hover:text-amber-400 transition-colors flex items-center gap-1">
-              <span>Main Site</span>
-              <span className="text-xs">↗</span>
-            </span>
+            ✕
           </button>
         </div>
 
-        {/* Bottom Left: Headline and Role Capabilities Summary */}
-        <div className="relative z-20 space-y-3.5 max-w-lg mt-auto pt-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 backdrop-blur-sm">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Dual Role Enterprise Authentication</span>
-          </div>
-
-          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold font-heading text-white tracking-tight leading-tight drop-shadow-md">
-            Organization Safety Portal
-          </h2>
-
-          <p className="text-sm sm:text-base text-slate-200 leading-relaxed font-medium drop-shadow-sm">
-            Authenticate as an <strong className="text-amber-300">Administrator</strong> for full audit controls or as a <strong className="text-sky-300">Normal User</strong> for field operations and incident reporting.
-          </p>
-
-          {/* Role pill indicators */}
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <div className="p-3 rounded-xl bg-black/40 backdrop-blur-md border border-amber-500/30 text-left">
-              <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Admin Privileges</span>
-              </div>
-              <div className="text-[11px] text-slate-300 mt-1 leading-snug">
-                Full Audits, Reset Controls, AI Batch Ingestion & Calibrations
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-black/40 backdrop-blur-md border border-sky-500/30 text-left">
-              <div className="flex items-center gap-1.5 text-sky-400 font-bold text-xs">
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>Normal User Access</span>
-              </div>
-              <div className="text-[11px] text-slate-300 mt-1 leading-snug">
-                Field Observations, Incident Reports, Telemetry & Precursor Review
-              </div>
-            </div>
-          </div>
+        {/* Mode Toggle: Login vs Register */}
+        <div className="flex p-1 bg-slate-100 dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800/80 text-xs font-bold">
+          <button
+            type="button"
+            onClick={() => { setMode('login'); setErrorMessage(''); }}
+            className={`flex-1 py-2 rounded-xl transition-all cursor-pointer ${
+              mode === 'login'
+                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Sign In (Login)
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode('register'); setErrorMessage(''); }}
+            className={`flex-1 py-2 rounded-xl transition-all cursor-pointer ${
+              mode === 'register'
+                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Register Citizen Account
+          </button>
         </div>
 
-      </div>
-
-      {/* ================= RIGHT HALF: AUTHENTICATION FORM ================= */}
-      <div className="w-full lg:w-1/2 min-h-screen bg-white dark:bg-[#09090b] flex flex-col justify-between p-6 sm:p-10 lg:p-14 relative overflow-y-auto">
-        
-        <div className="max-w-md w-full mx-auto my-auto space-y-5">
-          
-          {/* Back to Website Link */}
-          <div>
-            <button
-              onClick={onClose}
-              className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-amber-400 transition-colors cursor-pointer group"
-            >
-              <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-              <span>Back to Website</span>
-            </button>
-          </div>
-
-          {/* Form Header */}
-          <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-bold font-heading text-slate-950 dark:text-white tracking-tight">
-              Sign In to SafetyAI
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium">
-              Select your role or enter your enterprise credentials below.
-            </p>
-          </div>
-
-          {/* ================= 1-CLICK ROLE SELECTOR TABS ================= */}
+        {/* 1-Click Role Switcher (Available in login mode) */}
+        {mode === 'login' && (
           <div className="space-y-2">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-              Select Login Role
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1 font-medium">
+              <span>Select Role for Instant Demo:</span>
+              <span className="text-[10px] uppercase font-mono text-orange-400 font-bold">1-Click Fill</span>
             </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              {/* Administrator Role Card */}
-              <button
-                type="button"
-                onClick={() => handleSelectRole('admin')}
-                className={`p-3 rounded-2xl border text-left transition-all cursor-pointer relative flex flex-col justify-between ${
-                  activeRole === 'admin'
-                    ? 'bg-amber-500/10 dark:bg-amber-500/15 border-amber-500 ring-2 ring-amber-500/20 shadow-md shadow-amber-500/10'
-                    : 'bg-slate-50 dark:bg-[#141418] border-slate-200 dark:border-[#27272e] hover:border-slate-300 dark:hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between w-full mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                      activeRole === 'admin'
-                        ? 'bg-amber-500 text-slate-950 font-bold'
-                        : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                    }`}>
-                      <Shield className="w-4 h-4" />
+            <div className="grid grid-cols-3 gap-2">
+              {Object.keys(PRESET_ACCOUNTS).map((roleKey) => {
+                const acc = PRESET_ACCOUNTS[roleKey];
+                const isSelected = activeRole === roleKey;
+                return (
+                  <button
+                    key={roleKey}
+                    type="button"
+                    onClick={() => handleSelectRole(roleKey)}
+                    className={`p-2.5 rounded-2xl border text-left transition-all cursor-pointer relative ${
+                      isSelected
+                        ? 'border-orange-500/80 bg-orange-500/10 text-orange-400 shadow-md ring-1 ring-orange-500/40'
+                        : 'border-slate-200 dark:border-slate-800/80 bg-slate-50 dark:bg-slate-900/50 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold text-slate-900 dark:text-white truncate">
+                      {acc.roleLabel}
                     </div>
-                    <span className="text-xs font-bold text-slate-900 dark:text-white">Admin User</span>
-                  </div>
-                  {activeRole === 'admin' && (
-                    <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center">
-                      <Check className="w-3 h-3 stroke-[3]" />
-                    </span>
-                  )}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium leading-tight">
-                  Chief HSE Admin
-                </div>
-                <div className="text-[10px] text-amber-600 dark:text-amber-400 font-mono font-semibold mt-1">
-                  admin1@gmail.com
-                </div>
-              </button>
-
-              {/* Normal User Role Card */}
-              <button
-                type="button"
-                onClick={() => handleSelectRole('normal')}
-                className={`p-3 rounded-2xl border text-left transition-all cursor-pointer relative flex flex-col justify-between ${
-                  activeRole === 'normal'
-                    ? 'bg-sky-500/10 dark:bg-sky-500/15 border-sky-500 ring-2 ring-sky-500/20 shadow-md shadow-sky-500/10'
-                    : 'bg-slate-50 dark:bg-[#141418] border-slate-200 dark:border-[#27272e] hover:border-slate-300 dark:hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between w-full mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                      activeRole === 'normal'
-                        ? 'bg-sky-500 text-white font-bold'
-                        : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                    }`}>
-                      <User className="w-4 h-4" />
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                      {acc.badge}
                     </div>
-                    <span className="text-xs font-bold text-slate-900 dark:text-white">Normal User</span>
-                  </div>
-                  {activeRole === 'normal' && (
-                    <span className="w-5 h-5 rounded-full bg-sky-500 text-white flex items-center justify-center">
-                      <Check className="w-3 h-3 stroke-[3]" />
-                    </span>
-                  )}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium leading-tight">
-                  Field Safety Operator
-                </div>
-                <div className="text-[10px] text-sky-600 dark:text-sky-400 font-mono font-semibold mt-1">
-                  user1@gmail.com
-                </div>
-              </button>
-            </div>
-
-            {/* Active role permission helper info */}
-            <div className={`p-2.5 rounded-xl border text-[11px] flex items-center gap-2 transition-all ${
-              activeRole === 'admin'
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300'
-                : 'bg-sky-500/10 border-sky-500/30 text-sky-700 dark:text-sky-300'
-            }`}>
-              <Info className="w-4 h-4 shrink-0" />
-              <span>{PRESET_ACCOUNTS[activeRole].accessSummary}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
+        )}
 
-          {/* Error Message Alert */}
-          {errorMessage && (
-            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/70 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-start gap-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
-              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-              <div className="flex-1 leading-relaxed">{errorMessage}</div>
-            </div>
-          )}
+        {/* Error / Success Messages */}
+        {errorMessage && (
+          <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+        {successMessage && (
+          <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{successMessage}</span>
+          </div>
+        )}
 
-          {/* Forgot Password Notice */}
-          {forgotPasswordNotice && (
-            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 text-xs font-medium flex items-start gap-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
-              <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              <div className="flex-1 leading-relaxed">
-                For security reset or credential recovery, please contact your Organization HSE Lead or System Administrator at <span className="font-mono text-amber-400">admin@petrosafe.com</span>.
-              </div>
-            </div>
-          )}
-
-          {/* Success State */}
-          {isSuccess ? (
-            <div className="py-12 text-center space-y-3 animate-in fade-in zoom-in duration-200">
-              <div className="w-16 h-16 mx-auto rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-lg shadow-emerald-500/20 border border-emerald-500/30">
-                <CheckCircle2 className="w-8 h-8" />
-              </div>
-              <h3 className="text-xl font-bold font-heading text-slate-900 dark:text-white">
-                Authentication Successful
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                Access granted as {activeRole === 'admin' ? 'Chief HSE Administrator' : 'Field Safety Operator'}. Loading platform...
-              </p>
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-3.5">
-              
-              {/* Organization ID & Email Inputs */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {/* Org ID */}
-                <div className="sm:col-span-1">
-                  <label className="block text-xs font-semibold text-slate-800 dark:text-slate-300 mb-1">
-                    Org ID
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                      <Building2 className="w-3.5 h-3.5" />
-                    </div>
-                    <input
-                      type="text"
-                      value={orgId}
-                      onChange={(e) => setOrgId(e.target.value)}
-                      placeholder="id001"
-                      className="w-full pl-8 pr-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#141418] border border-slate-200 dark:border-[#27272e] text-xs font-mono font-semibold text-slate-900 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* Email Address */}
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-800 dark:text-slate-300 mb-1">
-                    Work Email
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                      <Mail className="w-3.5 h-3.5" />
-                    </div>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => {
-                        setEmail(e.target.value);
-                        if (errorMessage) setErrorMessage('');
-                      }}
-                      placeholder="e.g. admin1@gmail.com or user1@gmail.com"
-                      className="w-full pl-8 pr-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#141418] border border-slate-200 dark:border-[#27272e] text-xs font-medium text-slate-900 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all"
-                      required
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Password with Show/Hide Toggle */}
+        {/* Authentication Form */}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          
+          {mode === 'register' && (
+            <>
               <div>
-                <label className="block text-xs font-semibold text-slate-800 dark:text-slate-300 mb-1">
-                  Password
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Full Name
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Lock className="w-3.5 h-3.5" />
-                  </div>
+                  <User className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
                   <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      if (errorMessage) setErrorMessage('');
-                    }}
-                    placeholder="Enter password"
-                    className="w-full pl-8 pr-10 py-2.5 rounded-xl bg-slate-50 dark:bg-[#141418] border border-slate-200 dark:border-[#27272e] text-xs font-medium text-slate-900 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all"
+                    type="text"
                     required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Jane Citizen"
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-orange-500"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
                 </div>
               </div>
 
-              {/* Options: Remember Me & Forgot Password */}
-              <div className="flex items-center justify-between pt-0.5">
-                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500 accent-amber-500 cursor-pointer"
-                  />
-                  <span>Remember role</span>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Contact Phone Number
                 </label>
-                
-                <button
-                  type="button"
-                  onClick={() => setForgotPasswordNotice(!forgotPasswordNotice)}
-                  className="text-xs text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-amber-400 transition-colors font-medium cursor-pointer"
-                >
-                  Forgot password?
-                </button>
-              </div>
-
-              {/* Dynamic Login Button */}
-              <div className="pt-1">
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className={`w-full py-3 rounded-xl font-bold text-xs shadow-lg hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2 ${
-                    activeRole === 'admin'
-                      ? 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-slate-950 shadow-amber-500/20'
-                      : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white shadow-sky-500/20'
-                  }`}
-                >
-                  {isSubmitting ? (
-                    <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      <span>
-                        {activeRole === 'admin' ? 'Login as Administrator' : 'Login as Normal User'}
-                      </span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* ================= 1-CLICK QUICK-FILL DEMO LOGINS ================= */}
-              <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
-                <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 flex items-center justify-between">
-                  <span>Quick Demo Credentials:</span>
-                  <span className="text-[10px] font-mono text-amber-500">Instant 1-Click Fill</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {/* Admin 1-Click Card */}
-                  <button
-                    type="button"
-                    onClick={() => handleSelectRole('admin')}
-                    className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/5 hover:bg-amber-500/15 border border-amber-500/20 hover:border-amber-500/40 text-left transition-all cursor-pointer group"
-                    title="Fill Admin credentials: admin1@gmail.com / Admin1@123"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs shrink-0">
-                        <Shield className="w-3.5 h-3.5" />
-                      </div>
-                      <div>
-                        <div className="text-[11px] font-bold text-slate-900 dark:text-white">Admin Demo</div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">admin1@gmail.com</div>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-mono text-amber-400 font-bold bg-amber-500/20 px-2 py-0.5 rounded group-hover:bg-amber-500/30 shrink-0">
-                      Fill
-                    </span>
-                  </button>
-
-                  {/* Normal User 1-Click Card */}
-                  <button
-                    type="button"
-                    onClick={() => handleSelectRole('normal')}
-                    className="flex items-center justify-between p-2.5 rounded-xl bg-sky-500/5 hover:bg-sky-500/15 border border-sky-500/20 hover:border-sky-500/40 text-left transition-all cursor-pointer group"
-                    title="Fill Normal User credentials: user1@gmail.com / User1@123"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-xs shrink-0">
-                        <User className="w-3.5 h-3.5" />
-                      </div>
-                      <div>
-                        <div className="text-[11px] font-bold text-slate-900 dark:text-white">Normal User Demo</div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">user1@gmail.com</div>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-mono text-sky-400 font-bold bg-sky-500/20 px-2 py-0.5 rounded group-hover:bg-sky-500/30 shrink-0">
-                      Fill
-                    </span>
-                  </button>
+                <div className="relative">
+                  <Phone className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+91-98765-43210"
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-orange-500"
+                  />
                 </div>
               </div>
-
-            </form>
+            </>
           )}
 
-        </div>
-
-        {/* Bottom Security Note */}
-        <div className="text-center pt-4">
-          <div className="inline-flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 font-mono">
-            <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
-            <span>256-Bit Encrypted OIL SIF Security Standard</span>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Email Address
+            </label>
+            <div className="relative">
+              <Mail className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@emergency.com"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-orange-500 font-mono"
+              />
+            </div>
           </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Password
+            </label>
+            <div className="relative">
+              <Lock className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="w-full pl-10 pr-10 py-2.5 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-orange-500 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-3 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-xs rounded-xl shadow-lg shadow-orange-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+          >
+            {isLoading ? (
+              <span>Authenticating...</span>
+            ) : mode === 'register' ? (
+              <>
+                <span>Complete Registration</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            ) : (
+              <>
+                <span>Sign In as {PRESET_ACCOUNTS[activeRole]?.roleLabel || 'User'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+
+        </form>
+
+        {/* Security Footer */}
+        <div className="pt-2 text-center border-t border-slate-200 dark:border-slate-800/80">
+          <p className="text-[10px] text-slate-400 font-mono flex items-center justify-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+            <span>PBKDF2-HMAC-SHA256 Encrypted & Role Guarded</span>
+          </p>
         </div>
 
       </div>

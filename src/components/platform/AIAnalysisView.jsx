@@ -32,10 +32,17 @@ import {
   Database,
   Network,
   Crosshair,
-  Info
+  Info,
+  ChevronDown,
+  ChevronUp,
+  CheckSquare,
+  Search
 } from 'lucide-react';
 import { api } from '../../services/api';
 import FullAnalysisModal from './FullAnalysisModal';
+import IncidentLocationModal from './maps/IncidentLocationModal';
+import IncidentPostAnalysisMap from './maps/IncidentPostAnalysisMap';
+import AdminNavigationModal from './maps/AdminNavigationModal';
 import { 
   addReportRecord, 
   addWeakSignalToBoard, 
@@ -43,7 +50,8 @@ import {
   subscribeSafetyStore,
   getTodayDateString,
   getStoreState,
-  extractUnitKey
+  extractUnitKey,
+  syncBackendReportsToStore
 } from '../../services/safetyStore';
 
 // Available uploaded safety report data from ingestion registry
@@ -53,28 +61,52 @@ const AVAILABLE_UPLOADED_REPORTS = [
     name: 'Main Pipeline High-Pressure Gas Leakage',
     type: 'NEAR_MISS',
     location: 'Unit 1',
-    text: 'High-pressure gas pipeline flange developed severe leakage. Gas alarm at 65% LEL near switch.'
+    text: 'High-pressure gas pipeline flange developed severe leakage. Gas alarm at 65% LEL near switch.',
+    incidentLocation: {
+      latitude: 12.9716,
+      longitude: 77.5946,
+      name: 'Crude Distillation Unit (CDU)',
+      address: 'Crude Distillation Unit (Operating Sector, Primary Refining)'
+    }
   },
   {
     ref: 'OIL-BATCH-02',
     name: 'Electrical Switchboard Fire and Smoke Outbreak',
     type: 'NEAR_MISS',
     location: 'Unit 2',
-    text: 'Electrical fire erupted in distribution board due to overloaded breaker with open flames visible.'
+    text: 'Electrical fire erupted in distribution board due to overloaded breaker with open flames visible.',
+    incidentLocation: {
+      latitude: 12.9735,
+      longitude: 77.5938,
+      name: 'Electrical Substation 02 (415V Panel)',
+      address: 'Electrical Substation 02, Utilities Sector'
+    }
   },
   {
     ref: 'OIL-BATCH-03',
     name: 'Storage Shed LPG Gas Cylinder Valve Leakage',
     type: 'UNSAFE_CONDITION',
     location: 'Unit 3',
-    text: 'Pressurized LPG cylinder valve found leaking flammable propane gas inside storage shed.'
+    text: 'Pressurized LPG cylinder valve found leaking flammable propane gas inside storage shed.',
+    incidentLocation: {
+      latitude: 12.9680,
+      longitude: 77.5920,
+      name: 'LPG Storage Farm & Cylinder Shed',
+      address: 'LPG Storage Farm, Pressurized Vessels Sector'
+    }
   },
   {
     ref: 'OIL-BATCH-04',
     name: 'Hot Work Welding Sparks Floor Flash Fire',
     type: 'UNSAFE_ACT',
     location: 'Unit 4',
-    text: 'Welding sparks near solvent drum ignited oily rags on the floor causing an immediate flash fire.'
+    text: 'Welding sparks near solvent drum ignited oily rags on the floor causing an immediate flash fire.',
+    incidentLocation: {
+      latitude: 12.9705,
+      longitude: 77.5932,
+      name: 'Fabrication Workshop Bay 4',
+      address: 'Fabrication Workshop Bay 4, Conversion Area'
+    }
   }
 ];
 
@@ -196,10 +228,14 @@ function getStoredTotalRecords() {
     if (isWiped) {
       return [];
     }
+    const storeState = getStoreState();
+    if (storeState?.reports && storeState.reports.length > 0) {
+      return storeState.reports;
+    }
     const raw = localStorage.getItem('SAFETY_TOTAL_REPORTS_V3');
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed;
       }
     }
@@ -271,7 +307,14 @@ const SAFETY_KEYWORDS = [
   // Plant Equipment, Mobile & Logistics
   'pump', 'engine', 'compressor', 'turbine', 'generator', 'motor', 'forklift', 'truck',
   'vehicle', 'trailer', 'traffic', 'reversing', 'driver', 'driving', 'seatbelt', 'brake',
-  'excavat', 'trench', 'pit', 'housekeeping', 'clutter', 'obstruction', 'puddle'
+  'excavat', 'trench', 'pit', 'housekeeping', 'clutter', 'obstruction', 'puddle',
+
+  // Operational, Behavioral & Administrative Safety
+  'machinery', 'machine', 'equipment', 'operation', 'operating', 'operate',
+  'restrict', 'restricted', 'exclusion', 'unauthorized', 'entry', 'entering', 'zone',
+  'procedure', 'sop', 'protocol', 'instruction', 'bypass', 'bypassing', 'override',
+  'compliance', 'violation', 'non-compliance', 'line of fire', 'struck-by', 'proximity',
+  'surface', 'floor', 'walkway', 'slippery', 'wet'
 ];
 
 const UNRELATED_TERMS = [
@@ -293,28 +336,35 @@ const CONVERSATIONAL_PATTERNS = [
   /^(hi|hii|hiii|hello|hey|heyy|yo|test|testing|check)\b/i
 ];
 
-function isUnrelatedIssue(text) {
+function isUnrelatedIssue(text, checklist = []) {
+  if (Array.isArray(checklist) && checklist.length > 0) {
+    return false;
+  }
   if (!text) return true;
   const cleaned = text.trim().toLowerCase();
   if (cleaned.length === 0) return true;
+  if (cleaned.length < 4) return true;
   if (UNRELATED_TERMS.includes(cleaned)) return true;
   if (CONVERSATIONAL_PATTERNS.some(p => p.test(cleaned))) return true;
 
-  const hasSafetyWord = SAFETY_KEYWORDS.some(k => cleaned.includes(k));
-  if (!hasSafetyWord) {
-    return true;
-  }
-  if (cleaned.length < 4) return true;
+  // NOTE: The backend's classify_safety_observation_validity() is the
+  // authoritative safety-relevance gate. The frontend only filters
+  // obviously unrelated conversational/trivial input above. All other
+  // input is sent to the backend for proper semantic classification.
   return false;
 }
 
-function isTrivialInput(text) {
-  return isUnrelatedIssue(text);
+function isTrivialInput(text, checklist = []) {
+  return isUnrelatedIssue(text, checklist);
 }
 
-function deriveReportName(text, type, loc) {
+function deriveReportName(text, type, loc, checklist = []) {
+  if (!text && Array.isArray(checklist) && checklist.length > 0) {
+    return `${checklist.slice(0, 2).join(' & ')} Observation (${loc})`;
+  }
   if (!text) return `Safety Observation (${loc})`;
-  if (isUnrelatedIssue(text)) return 'Enter Correct Issue';
+
+  if (isUnrelatedIssue(text, checklist)) return 'Enter Correct Issue';
   const matched = AVAILABLE_UPLOADED_REPORTS.find(r => r.text.trim() === text.trim());
   if (matched && matched.name) return matched.name;
 
@@ -347,69 +397,166 @@ function deriveReportName(text, type, loc) {
   return `Safety Observation Report (${loc})`;
 }
 
-function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatus, sifStatus, text) {
-  if (isTrivialInput(text)) return 0;
+function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatus, sifStatus, text, checklist) {
+  if (isTrivialInput(text) && (!checklist || checklist.length === 0)) return 0;
   
-  // 1. Hazard severity (0–30)
-  let sev = 10;
-  const hLow = (hazard || '').toLowerCase();
-  if (['arc flash', 'electrical', 'explosion', 'gas leak', 'flammable', 'suspended load', 'dropped object', 'amputation'].some(k => hLow.includes(k))) {
-    sev = 28;
-  } else if (['fall from height', 'work at height', 'excavation', 'fire', 'chemical'].some(k => hLow.includes(k))) {
-    sev = 24;
-  } else if (hLow.includes('slip') || hLow.includes('trip')) {
-    sev = 8;
-  }
-
-  // 2. Energy exposure (0–25)
-  let ene = 5;
-  const eLow = (energy || '').toLowerCase();
-  if (energy && energy !== 'Insufficient Information') {
-    if (['high-voltage', 'arc flash', 'pneumatic', 'pressure', 'toxic', 'thermal'].some(k => eLow.includes(k))) {
-      ene = 24;
-    } else if (eLow.includes('gravity / kinetic') || eLow.includes('low kinetic')) {
-      ene = 5;
-    } else if (eLow.includes('gravity') || eLow.includes('kinetic')) {
-      ene = 15;
-    }
-  }
-
-  // 3. Worker exposure (0–20)
-  let exp = 5;
-  const exLow = (exposure || '').toLowerCase();
-  if (exposure && exposure !== 'Insufficient Information') {
-    if (['line-of-fire', 'direct physical proximity', 'fall edge'].some(k => exLow.includes(k))) {
-      exp = 18;
-    } else if (exLow.includes('slip/fall exposure')) {
-      exp = 6;
-    }
-  }
-
-  // 4. Barrier condition (0–15)
-  let bar = 4;
-  if (barrierStatus === 'Barrier Failed' || barrierStatus === 'BARRIER_FAILED') {
-    bar = 15;
-  } else if (barrierStatus === 'Barrier Missing' || barrierStatus === 'BARRIER_MISSING') {
-    bar = 13;
-  } else if (barrierStatus === 'Barrier Intact' || barrierStatus === 'BARRIER_PRESENT') {
-    bar = 2;
-  } else {
-    bar = 4;
-  }
-
-  // 5. Escalation potential (0–10)
-  let esc = 3;
   const tLow = (text || '').toLowerCase();
-  if (['flame', 'smoke', 'hiss', 'pressure', 'high', 'spreading'].some(k => tLow.includes(k))) {
-    esc = 9;
-  } else if (['stairs', 'steps', 'edge', 'ramp'].some(k => tLow.includes(k))) {
-    esc = 5;
-  } else if (['water', 'oil', 'grease', 'spill'].some(k => tLow.includes(k))) {
-    esc = 4;
+  const hLow = (hazard || '').toLowerCase();
+  const eLow = (energy || '').toLowerCase();
+  const exLow = (exposure || '').toLowerCase();
+  const bNorm = (barrierStatus || '').toUpperCase();
+  const checkListLower = Array.isArray(checklist) ? checklist.map(c => c.toLowerCase()) : [];
+  const combText = `${tLow} ${hLow} ${checkListLower.join(' ')}`;
+
+  // 1. Multi-Hazard Severity & Cumulative Factor Boost (0–35)
+  const detectedWeights = [];
+
+  // LOTO
+  if (/loto|lockout|tagout|isolation|not locked out|ignored loto/.test(combText)) {
+    detectedWeights.push(30);
+  }
+  // Confined Space
+  if (/confined space|tank entry|vessel entry|atmospheric monitoring|gas test/.test(combText)) {
+    detectedWeights.push(30);
+  }
+  // High Pressure
+  if (/high[- ]pressure|pressurized|hydraulic|pneumatic|pipe burst|blowout|psi|bar/.test(combText)) {
+    detectedWeights.push(28);
+  }
+  // Line of Fire
+  if (/line[- ]of[- ]fire|line of fire|under load|suspended load|dropped object|struck-by/.test(combText)) {
+    detectedWeights.push(28);
+  }
+  // Electrical
+  if (/electrical|arc flash|voltage|switchgear|11kv|415v/.test(combText)) {
+    detectedWeights.push(28);
+  }
+  // Fall from height
+  if (/fall from height|work at height|scaffold|ladder|roof edge/.test(combText)) {
+    detectedWeights.push(26);
+  }
+  // Fire / explosion
+  const fireText = combText.replace(/line[- ]of[- ]fire/g, '');
+  if (/fire|explosion|hot work|welding|flash/.test(fireText)) {
+    detectedWeights.push(26);
+  }
+  // PPE
+  if (/ppe|safety glasses|helmet|goggles|respirator/.test(combText)) {
+    const hasCritical = /loto|lockout|pressure|high-pressure|confined space|electrical|suspended load/.test(combText);
+    detectedWeights.push(hasCritical ? 22 : 14);
+  }
+  // Slip/trip/housekeeping
+  if (/slip|trip|housekeeping/.test(combText)) {
+    detectedWeights.push(8);
   }
 
-  const total = sev + ene + exp + bar + esc;
-  return Math.max(0, Math.min(100, total));
+  if (detectedWeights.length === 0) {
+    detectedWeights.push(10);
+  }
+
+  detectedWeights.sort((a, b) => b - a);
+  let hazardScore = detectedWeights[0];
+  for (let i = 1; i < detectedWeights.length; i++) {
+    const w = detectedWeights[i];
+    if (w >= 26) hazardScore += 6;
+    else if (w >= 20) hazardScore += 4;
+    else hazardScore += 2;
+  }
+  hazardScore = Math.min(35, hazardScore);
+
+  // 2. Energy exposure (0–28)
+  let energyScore = 6;
+  if (/high[- ]pressure|pressure|hydraulic|pneumatic|blowout|psi|bar/.test(combText) || /pressure|pneumatic|hydraulic/.test(eLow)) {
+    energyScore = 28;
+  } else if (/electrical|arc flash|voltage|11kv|415v/.test(combText) || /electrical/.test(eLow)) {
+    energyScore = 28;
+  } else if (/confined space|tank entry|toxic|atmospheric|h2s/.test(combText) || /toxic|atmospheric/.test(eLow)) {
+    energyScore = 26;
+  } else if (/gravity|suspended load|dropped object|fall from height|work at height/.test(combText) || /gravity/.test(eLow)) {
+    energyScore = 25;
+  } else if (/thermal|fire|flame/.test(combText) || /thermal/.test(eLow)) {
+    energyScore = 24;
+  } else if (/kinetic|mobile equipment|forklift|vehicle/.test(combText) || /kinetic/.test(eLow)) {
+    energyScore = 20;
+  } else if (eLow.includes('multiple')) {
+    energyScore = 26;
+  } else if (eLow.includes('chemical')) {
+    energyScore = 18;
+  }
+
+  // 3. Worker exposure (0–22)
+  let exposureScore = 6;
+  if (/line-of-fire|line of fire|stood in the line of fire|under load|under suspended load|beneath suspended/.test(combText) || /line-of-fire/.test(exLow)) {
+    exposureScore = 22;
+  } else if (/confined space|inside vessel|tank entry/.test(combText) || /confined space/.test(exLow)) {
+    exposureScore = 20;
+  } else if (/touching live|live panel|direct physical proximity|fall edge/.test(combText) || /direct physical/.test(exLow)) {
+    exposureScore = 20;
+  } else if (/trajectory|restricted area|near moving/.test(combText)) {
+    exposureScore = 16;
+  } else if (/not exposed|zero exposure/.test(combText) || /not exposed/.test(exLow)) {
+    exposureScore = 2;
+  } else if (/slip|walking|door/.test(combText)) {
+    exposureScore = 5;
+  } else {
+    exposureScore = 8;
+  }
+
+  // 4. Barrier condition (0–20)
+  let barrierScore = 4;
+  if (/FAILED|RUPTURE/.test(bNorm)) {
+    barrierScore = 20;
+  } else if (/BYPASSED|OVERRIDDEN/.test(bNorm)) {
+    barrierScore = 20;
+  } else if (/MISSING|NOT DEPLOYED/.test(bNorm) || /loto not followed|ignored loto|without isolation|not locked out/.test(combText)) {
+    if (/loto|lockout|isolation|gas test|guard/.test(combText)) {
+      barrierScore = 18;
+    } else {
+      barrierScore = 10;
+    }
+  } else if (/COMPROMISED|DEGRADED/.test(bNorm)) {
+    barrierScore = 10;
+  } else if (/PRESENT|INTACT|FUNCTIONING/.test(bNorm)) {
+    barrierScore = 2;
+  } else {
+    barrierScore = 5;
+  }
+
+  // 5. Synergy escalation (0–15)
+  let synergyScore = 0;
+  const hasLoto = /loto|lockout|tagout|isolation/.test(combText);
+  const hasLof = /line of fire|line-of-fire|under load|suspended load/.test(combText);
+  const hasPress = /high[- ]pressure|pressure|hydraulic|pneumatic/.test(combText);
+  const hasConf = /confined space|tank entry|vessel entry/.test(combText);
+
+  if (hasLoto && hasLof && hasPress) {
+    synergyScore = 12;
+  } else if (hasConf && hasLoto) {
+    synergyScore = 12;
+  } else if (/suspended load/.test(combText) && hasLof) {
+    synergyScore = 10;
+  } else if (hasLoto && hasPress) {
+    synergyScore = 8;
+  } else if (hasPress && hasLof) {
+    synergyScore = 8;
+  }
+
+  const rawScore = hazardScore + energyScore + exposureScore + barrierScore + synergyScore;
+
+  let scaledScore = 25;
+  if (rawScore >= 100) {
+    scaledScore = Math.min(95, 85 + Math.floor((rawScore - 100) * 0.6));
+  } else if (rawScore >= 80) {
+    scaledScore = Math.min(88, 75 + Math.floor((rawScore - 80) * 0.65));
+  } else if (rawScore >= 60) {
+    scaledScore = Math.min(74, 55 + Math.floor((rawScore - 60) * 0.95));
+  } else if (rawScore >= 40) {
+    scaledScore = Math.min(54, 38 + Math.floor((rawScore - 40) * 0.8));
+  } else {
+    scaledScore = Math.max(5, Math.floor(rawScore * 0.85));
+  }
+
+  return Math.max(0, Math.min(100, scaledScore));
 }
 
 function getDynamicRecommendations(hazard, text) {
@@ -496,196 +643,6 @@ function getDynamicConfidence(hazard, energy, exposure, barrierStatus, text) {
   return Math.min(96.8, Math.round(base * 10) / 10);
 }
 
-function analyzeSafetyObservation(text, rType) {
-  const lower = (text || '').toLowerCase().trim();
-
-  // 1. Hazard
-  let hazard = 'Insufficient Information';
-  if (/slip\w*|slippery|slick|trip|uneven surface|water on floor|oily floor|oil.*leak/i.test(lower)) {
-    hazard = 'Slip / Fall Hazard (Walking-Working Surface)';
-  } else if (/heat|extreme heat|cooling system|heat stroke|heat exhaustion|high temperature|ambient heat/i.test(lower)) {
-    hazard = 'Heat Exposure & Thermal Environmental Hazard';
-  } else if (/hot pipe|hot surface|touching.*hot|hot equipment|scalding/i.test(lower)) {
-    hazard = 'Hot Surface & Thermal Hazard';
-  } else if (/suspended load|overhead load|crane lift|rigging|dropped object|falling pipe/i.test(lower)) {
-    hazard = 'Suspended Load & Dropped Object Hazard';
-  } else if (/height|scaffold|ladder|roof|edge|climbing/i.test(lower)) {
-    hazard = 'Work at Height & Fall Hazard';
-  } else if (/conductor|live conductor|insulation|electr|voltage|arc flash|switchboard|breaker|live wire/i.test(lower)) {
-    hazard = 'Electrical Arc Flash & Shock Hazard';
-  } else if (/gas|pipeline|propane|lpg|cylinder|compressor|hiss/i.test(lower)) {
-    hazard = 'Flammable Gas Leakage';
-  } else if (/pressure release|high-pressure release|uncontrolled.*pressure|pressur|hydraulic|steam|line break|hydrotest/i.test(lower)) {
-    hazard = 'Hazardous Pressure & Line Release';
-  } else if (/fire|flame|spark|welding|hot work|combustible/i.test(lower)) {
-    hazard = 'Fire & Thermal Ignition Hazard';
-  } else if (/chemical|acid|caustic|solvent|corrosive/i.test(lower)) {
-    hazard = 'Hazardous Chemical Exposure';
-  } else if (/moving vehicle|struck by.*vehicle|vehicle.*plant|forklift|vehicle|truck|dumper|loader/i.test(lower)) {
-    hazard = 'Mobile Equipment & Vehicle Interaction Hazard';
-  } else if (/rotating|pinch|conveyor|roller|blade|entangle|machine guard|machinery without/i.test(lower)) {
-    hazard = 'Rotating Machinery & Entanglement Hazard';
-  }
-
-  // 2. Energy Vector
-  let energyVector = 'Insufficient Information';
-  if (/heat|extreme heat|hot pipe|hot surface|cooling system|thermal|fire|flame|spark/i.test(lower)) {
-    energyVector = 'Thermal Energy';
-  } else if (/live conductor|conductor|insulation|electr|voltage|415v|11kv|arc/i.test(lower)) {
-    energyVector = 'Electrical Energy';
-  } else if (/pressure release|high-pressure release|uncontrolled.*pressure|gas|pressure|pneumatic|hydraulic|steam/i.test(lower)) {
-    energyVector = 'Stored Pressure / Pneumatic & Hydraulic Energy';
-  } else if (/moving vehicle|struck by.*vehicle|vehicle.*plant|vehicle|truck|forklift/i.test(lower)) {
-    energyVector = 'Kinetic Energy';
-  } else if (/rotating|machinery|roller|blade|nip point|machine guard/i.test(lower)) {
-    energyVector = 'Mechanical Energy';
-  } else if (/height|scaffold|ladder|roof|edge|dropped/i.test(lower)) {
-    energyVector = 'Gravity';
-  } else if (/slip\w*|slippery|slick|wet floor|oily floor|oil leaked/i.test(lower)) {
-    energyVector = 'Gravity / Kinetic';
-  } else if (/chemical|acid|toxic|caustic/i.test(lower)) {
-    energyVector = 'Chemical / Toxic Energy';
-  }
-
-  // 3. Worker Exposure
-  let workerExposure = 'Insufficient Information';
-  if (/hot pipe|hot surface|touching.*hot/i.test(lower)) {
-    workerExposure = 'Direct contact with hot surface / thermal equipment';
-  } else if (/heat|extreme heat|cooling system|high temperature|heat-rest/i.test(lower)) {
-    workerExposure = 'Exposure to excessive heat / elevated thermal environment';
-  } else if (/live.*conductor|energized conductor|contact.*energized|near energized/i.test(lower)) {
-    workerExposure = 'Worker in direct physical proximity or potential contact with live electrical conductors';
-  } else if (/struck by.*vehicle|moving vehicle|vehicle.*plant|pedestrian/i.test(lower)) {
-    workerExposure = 'Pedestrian worker situated in immediate trajectory of mobile equipment';
-  } else if (/uncontrolled.*pressure|pressure release/i.test(lower)) {
-    workerExposure = 'Worker situated in direct line-of-fire of uncontrolled pressure release';
-  } else if (/under load|beneath|in drop zone/i.test(lower)) {
-    workerExposure = 'Worker directly exposed in line-of-fire beneath suspended load';
-  } else if (/at height|on scaffold|on roof|near edge/i.test(lower)) {
-    workerExposure = 'Worker exposed to unprotected fall edge at elevation';
-  } else if (/machinery without.*guard|unguarded.*machin/i.test(lower)) {
-    workerExposure = 'Worker limbs in proximity to unguarded mechanical movement';
-  } else if (/slip|slippery|slick|oily floor/i.test(lower)) {
-    workerExposure = 'Potential slip/fall exposure on compromised walking surface';
-  }
-
-  // 4. Barrier Status
-  let barrierStatus = 'Insufficient Information';
-  if (/cooling system failed|damaged electrical insulation|damaged insulation|uncontrolled.*pressure|snapped|broke|failed|barrier failed/i.test(lower)) {
-    barrierStatus = 'Barrier Failed';
-  } else if (/ignored.*heat-rest|without.*guard|no guard|missing guard|no harness|without permit|ignored.*ppe|without.*ppe/i.test(lower)) {
-    barrierStatus = 'Barrier Missing';
-  } else if (/safety net caught|harness arrested|interlock stopped|emergency stop activated|tripped breaker|alarm sounded/i.test(lower)) {
-    barrierStatus = 'Barrier Intact';
-  } else if (/heat|extreme heat/i.test(lower)) {
-    barrierStatus = 'Insufficient information regarding heat controls';
-  }
-
-  // 5. Dynamic Classification Logic
-  const hasNoInjury = /\b(not injured|no injury|no one was injured|no one injured|avoided injury|without injury)\b/i.test(lower);
-  const hasInjury = /\b(injured|injury|burns?|wound|cut|amputation|fracture|heat stroke|hospitaliz|hurt)\b/i.test(lower) && !hasNoInjury;
-  const hasNearMiss = /\b(almost slipped|nearly slipped|nearly struck|almost struck|nearly hit|nearly contacted|almost contacted|nearly came into contact|narrowly avoided|close call)\b/i.test(lower);
-  const hasUnsafeAct = /\b(ignored.*(heat-rest|schedule|ppe|rule|procedure|warning|permit)|operated.*without|operating.*without|without required|without the required|failed to wear|bypassed|entered.*restricted|without authorization|without following the required procedure)\b/i.test(lower);
-
-  let classification = 'UNSAFE CONDITION';
-  let classificationCode = 'UNSAFE_CONDITION';
-  if (hasInjury) {
-    if (hasUnsafeAct) {
-      classification = 'UNSAFE ACT';
-      classificationCode = 'UNSAFE_ACT';
-    } else {
-      classification = 'UNSAFE CONDITION';
-      classificationCode = 'UNSAFE_CONDITION';
-    }
-  } else {
-    if (hasNearMiss || (hasNoInjury && /\b(almost|nearly|narrowly|close call|slipped|contact|struck)\b/i.test(lower))) {
-      classification = 'NEAR MISS';
-      classificationCode = 'NEAR_MISS';
-    } else if (hasUnsafeAct) {
-      classification = 'UNSAFE ACT';
-      classificationCode = 'UNSAFE_ACT';
-    } else {
-      classification = 'UNSAFE CONDITION';
-      classificationCode = 'UNSAFE_CONDITION';
-    }
-  }
-
-  // 6. Context-Derived Root Cause
-  let rootCause = 'Insufficient Information';
-  if (/ignored.*heat-rest/i.test(lower)) {
-    rootCause = 'Failure to follow the mandatory heat-rest schedule resulted in prolonged worker exposure to extreme heat and consequent injury.';
-  } else if (/cooling system failed/i.test(lower)) {
-    rootCause = 'Mechanical failure of the workspace cooling system resulted in excessive heat accumulation and consequent heat injury.';
-  } else if (/\b(heat|extreme heat)\b/i.test(lower) && !/welding|fire|hot pipe/i.test(lower)) {
-    rootCause = hasInjury
-      ? 'The reported injury appears to be associated with uncontrolled heat exposure; additional information is required to determine the specific underlying cause.'
-      : 'Excessive thermal environmental conditions created heat exposure hazard without adequate cooling or rest controls.';
-  } else if (/ignored.*ppe/i.test(lower) && /chemical|burn|acid/i.test(lower)) {
-    rootCause = 'Failure to follow required PPE controls resulted in worker exposure to the chemical hazard.';
-  } else if (/operated.*machin.*without.*guard|machinery without.*guard/i.test(lower)) {
-    rootCause = 'Operating machinery without the required safeguard in place resulted in direct worker contact with moving parts and injury.';
-  } else if (/oil was leaking|oil leaked/i.test(lower)) {
-    rootCause = 'Failure to control the equipment leak resulted in oil accumulation and created a slip hazard.';
-  } else if (/almost slipped/i.test(lower)) {
-    rootCause = 'Inadequate control of the walking surface condition created a slip potential, narrowly avoiding personnel injury.';
-  } else if (/damaged electrical insulation/i.test(lower)) {
-    rootCause = 'Physical degradation or mechanical damage to electrical insulation compromised energized conductor isolation.';
-  } else if (/nearly contacted/i.test(lower) && /conductor|electrical|wire/i.test(lower)) {
-    rootCause = 'Inadequate electrical isolation, guarding, or clearance boundaries allowed worker proximity to energized conductors.';
-  } else if (/uncontrolled.*pressure/i.test(lower)) {
-    rootCause = 'Loss of pressure containment or mechanical integrity failure resulted in an uncontrolled high-pressure energy release.';
-  } else if (/struck by.*vehicle/i.test(lower)) {
-    rootCause = 'Inadequate pedestrian segregation and traffic management controls allowed moving vehicle interaction with worker.';
-  } else if (classification === 'UNSAFE ACT') {
-    rootCause = 'Deviation from established operational safety protocols directly contributed to the observed event.';
-  } else if (classification === 'UNSAFE CONDITION' && hazard !== 'Insufficient Information') {
-    rootCause = 'Physical or environmental workplace hazards remained unmitigated, presenting operational risk.';
-  }
-
-  // 7. SIF Determination
-  const isSevereHeat = /\b(life-threatening|heat stroke|hospitaliz|critical|unconscious)\b/i.test(lower);
-  const isHighEnergy = (
-    /\b(uncontrolled.*pressure|high-pressure release|struck by.*vehicle|moving vehicle|live conductor|energized conductor|suspended load|dropped object|fall from height|machinery without.*guard|amputation)\b/i.test(lower) ||
-    (['Electrical Energy', 'Stored Pressure / Pneumatic & Hydraulic Energy', 'Kinetic Energy', 'Gravity'].includes(energyVector) && !hazard.includes('Slip')) ||
-    (energyVector === 'Thermal Energy' && isSevereHeat)
-  );
-
-  let sifPrecursor = isHighEnergy ? 'YES' : 'NO';
-  let sifStatus = isHighEnergy ? 'SIF' : 'NON-SIF';
-
-  const riskScore = calculateDynamicRiskScore(hazard, energyVector, workerExposure, barrierStatus, sifPrecursor, text);
-  const confidence = getDynamicConfidence(hazard, energyVector, workerExposure, barrierStatus, text);
-  const recommendations = getDynamicRecommendations(hazard, text);
-  
-  let explanation = '';
-  if ((lower.includes('heat') || lower.includes('thermal')) && hasInjury && classification === 'UNSAFE CONDITION') {
-    explanation = 'The report describes an actual heat-related injury, so it is not a near miss. The available information does not identify unsafe worker behavior, so the event should not automatically be classified as an unsafe act. The reported context primarily indicates heat exposure as the hazard. No clear SIF pathway is established from the available information.';
-  } else {
-    explanation = getDynamicExplanation(sifPrecursor, hazard, energyVector, workerExposure, barrierStatus, text);
-  }
-
-  return {
-    classification,
-    classificationCode,
-    sifStatus,
-    sifPrecursor,
-    hazard,
-    energyVector,
-    workerExposure,
-    barrierStatus,
-    rootCause,
-    riskScore,
-    confidence,
-    recommendations,
-    explanation,
-    detectedHazards: [
-      `Hazard: ${hazard}`,
-      `Energy Vector: ${energyVector}`,
-      `Worker Exposure: ${workerExposure}`,
-      `Barrier Status: ${barrierStatus}`
-    ]
-  };
-}
 
 // Dynamic Weak Signals Correlation across Real Records Only
 // STRICT RULE: Requires >= 2 recurring observations across Location + Activity + Time
@@ -784,6 +741,101 @@ function generateAllWeakSignalsAnalysis(storedReports, currentResult, currentTex
   return results;
 }
 
+const CLASSIFICATION_CHECKLISTS = {
+  NEAR_MISS: [
+    { id: 'nm_slip_trip', label: 'Slip / Trip / Fall', keywords: ['slip', 'trip', 'fall', 'stumble', 'floor'] },
+    { id: 'nm_work_height', label: 'Working at height', keywords: ['height', 'scaffold', 'ladder', 'elevat', 'fall', 'tie-off'] },
+    { id: 'nm_dropped_object', label: 'Dropped object', keywords: ['dropped', 'falling', 'overhead', 'load', 'crane', 'hoist', 'rigging'] },
+    { id: 'nm_vehicle_near_miss', label: 'Near miss with vehicle', keywords: ['vehicle', 'truck', 'forklift', 'car', 'trailer', 'driver'] },
+    { id: 'nm_moving_equip', label: 'Near miss with moving equipment', keywords: ['moving', 'machinery', 'rotating', 'conveyor', 'crane'] },
+    { id: 'nm_equip_failure', label: 'Equipment failure', keywords: ['equipment', 'failure', 'fail', 'malfunction', 'broken', 'defect'] },
+    { id: 'nm_mechanical_failure', label: 'Mechanical failure', keywords: ['mechanical', 'pump', 'engine', 'compressor', 'turbine', 'motor'] },
+    { id: 'nm_electrical', label: 'Electrical hazard', keywords: ['electrical', 'electric', 'voltage', 'arc', 'wire', 'cable', 'breaker', 'shock'] },
+    { id: 'nm_fire_explosion', label: 'Fire / Explosion risk', keywords: ['fire', 'flame', 'explosion', 'blast', 'smoke', 'burn', 'ignit', 'spark'] },
+    { id: 'nm_gas_release', label: 'Gas release', keywords: ['gas', 'vapor', 'vapour', 'fume', 'lel', 'release', 'hiss'] },
+    { id: 'nm_hydrocarbon_leak', label: 'Hydrocarbon leak', keywords: ['hydrocarbon', 'oil', 'fuel', 'diesel', 'petrol', 'crude', 'leak'] },
+    { id: 'nm_chemical_exposure', label: 'Chemical exposure', keywords: ['chemical', 'acid', 'caustic', 'solvent', 'toxic'] },
+    { id: 'nm_pressure_release', label: 'Pressure release', keywords: ['pressure', 'psi', 'bar', 'pressur', 'relief', 'vessel', 'blowout'] },
+    { id: 'nm_energy_release', label: 'Unexpected energy release', keywords: ['energy', 'release', 'stored', 'spring', 'hydraulic', 'pneumatic'] },
+    { id: 'nm_unsafe_prox', label: 'Unsafe proximity', keywords: ['proximity', 'close', 'near', 'distance', 'zone', 'clearance'] },
+    { id: 'nm_line_of_fire', label: 'Line of fire', keywords: ['line of fire', 'moving', 'pinch', 'crush', 'struck', 'barrier'] },
+    { id: 'nm_struck_by', label: 'Struck-by hazard', keywords: ['struck', 'impact', 'collision', 'hit', 'swing'] },
+    { id: 'nm_pinch_point', label: 'Pinch point', keywords: ['pinch', 'crush', 'caught', 'roller', 'gear'] },
+    { id: 'nm_confined_space', label: 'Confined space', keywords: ['confined', 'tank', 'vessel', 'entry', 'manhole'] },
+    { id: 'nm_ppe_issue', label: 'PPE issue', keywords: ['ppe', 'helmet', 'gloves', 'goggle', 'glasses', 'respirator', 'mask', 'shield'] },
+    { id: 'nm_emergency_response', label: 'Emergency response issue', keywords: ['emergency', 'alarm', 'siren', 'evacuation', 'muster'] },
+    { id: 'nm_process_dev', label: 'Process deviation', keywords: ['process', 'deviation', 'pressure', 'temp', 'valve', 'flow', 'gauge'] },
+    { id: 'nm_ptw_issue', label: 'Permit-to-work issue', keywords: ['permit', 'ptw', 'work permit', 'authorization'] },
+    { id: 'nm_loto_issue', label: 'Lockout / Tagout issue', keywords: ['loto', 'lockout', 'tagout', 'isolation', 'de-energiz'] },
+    { id: 'nm_comm_failure', label: 'Communication failure', keywords: ['communication', 'radio', 'misunderstand', 'signal', 'hand signal'] },
+    { id: 'nm_inadequate_supervision', label: 'Inadequate supervision', keywords: ['supervision', 'supervisor', 'unsupervised', 'oversight'] }
+  ],
+  UNSAFE_ACT: [
+    { id: 'ua_ppe_not_used', label: 'PPE not used', keywords: ['ppe', 'helmet', 'gloves', 'goggle', 'glasses', 'respirator', 'mask', 'wear'] },
+    { id: 'ua_incorrect_ppe', label: 'Incorrect PPE used', keywords: ['ppe', 'wrong', 'incorrect', 'improper', 'protection'] },
+    { id: 'ua_proc_not_followed', label: 'Procedure not followed', keywords: ['procedure', 'sop', 'protocol', 'permit', 'ptw', 'rule', 'instruction'] },
+    { id: 'ua_unsafe_op', label: 'Unsafe operation', keywords: ['operation', 'operate', 'speed', 'bypassed', 'reckless', 'rushing'] },
+    { id: 'ua_unauth_op', label: 'Unauthorized operation', keywords: ['unauthorized', 'operation', 'unapproved', 'unqualified'] },
+    { id: 'ua_bypassing_control', label: 'Bypassing safety control', keywords: ['bypassed', 'bypass', 'interlock', 'tamper', 'defeat', 'bridge'] },
+    { id: 'ua_height_no_prot', label: 'Working at height without protection', keywords: ['height', 'scaffold', 'ladder', 'harness', 'unclipped', 'tie-off', 'fall'] },
+    { id: 'ua_unsafe_lifting', label: 'Unsafe lifting', keywords: ['lifting', 'lift', 'back', 'ergonomic', 'heavy', 'rigging', 'sling'] },
+    { id: 'ua_unsafe_manual_handling', label: 'Unsafe manual handling', keywords: ['manual', 'handling', 'carry', 'push', 'pull', 'strain'] },
+    { id: 'ua_enter_restricted', label: 'Entering restricted area', keywords: ['restricted', 'unauthorized', 'barricade', 'cordon', 'exclusion'] },
+    { id: 'ua_enter_line_of_fire', label: 'Entering line of fire', keywords: ['line of fire', 'path', 'crush', 'swing', 'trajectory'] },
+    { id: 'ua_under_load', label: 'Standing under suspended load', keywords: ['suspended', 'load', 'crane', 'under', 'overhead', 'hoist'] },
+    { id: 'ua_near_moving_equip', label: 'Working near moving equipment', keywords: ['moving', 'equipment', 'machinery', 'proximity', 'close'] },
+    { id: 'ua_unsafe_vehicle_op', label: 'Unsafe vehicle operation', keywords: ['vehicle', 'forklift', 'truck', 'driving', 'reversing', 'traffic'] },
+    { id: 'ua_speeding', label: 'Speeding', keywords: ['speeding', 'speed', 'fast', 'rushing', 'limit'] },
+    { id: 'ua_phone_distraction', label: 'Mobile phone distraction', keywords: ['phone', 'mobile', 'distraction', 'cell', 'calling', 'texting'] },
+    { id: 'ua_loto_not_followed', label: 'Lockout / Tagout not followed', keywords: ['loto', 'lockout', 'tagout', 'isolation', 'de-energiz', 'energiz'] },
+    { id: 'ua_ptw_violation', label: 'Permit-to-work violation', keywords: ['permit', 'ptw', 'violation', 'unauthorized', 'expired'] },
+    { id: 'ua_confined_space_violation', label: 'Confined space procedure violation', keywords: ['confined', 'tank', 'entry', 'atmosphere', 'ventilation'] },
+    { id: 'ua_hot_work_violation', label: 'Hot work procedure violation', keywords: ['hot work', 'welding', 'cutting', 'grinding', 'spark', 'torch', 'fire watch'] },
+    { id: 'ua_smoking_restricted', label: 'Smoking in restricted area', keywords: ['smoking', 'smoke', 'cigarette', 'lighter', 'match'] },
+    { id: 'ua_improper_tool', label: 'Improper tool usage', keywords: ['tool', 'improvised', 'wrong tool', 'modified', 'damaged tool'] },
+    { id: 'ua_remove_guard', label: 'Removing machine guard', keywords: ['guard', 'removed', 'removal', 'cover', 'barrier'] },
+    { id: 'ua_op_without_auth', label: 'Operating without authorization', keywords: ['authorization', 'unauthorized', 'unqualified', 'unlicensed'] },
+    { id: 'ua_ignoring_alarm', label: 'Ignoring warning/alarm', keywords: ['alarm', 'warning', 'ignoring', 'ignored', 'siren', 'detector'] },
+    { id: 'ua_failure_communicate', label: 'Failure to communicate hazard', keywords: ['communicate', 'communication', 'warn', 'handover', 'briefing'] },
+    { id: 'ua_inadequate_supervision', label: 'Inadequate supervision', keywords: ['supervision', 'supervisor', 'unsupervised', 'oversight'] }
+  ],
+  UNSAFE_CONDITION: [
+    { id: 'uc_damaged_equip', label: 'Damaged equipment', keywords: ['damaged', 'damage', 'broken', 'wear', 'crack', 'defect', 'aged'] },
+    { id: 'uc_defective_equip', label: 'Defective equipment', keywords: ['defective', 'faulty', 'malfunction', 'broken', 'failure'] },
+    { id: 'uc_missing_guard', label: 'Missing machine guard', keywords: ['guard', 'missing guard', 'cover', 'shield', 'unprotected'] },
+    { id: 'uc_poor_housekeeping', label: 'Poor housekeeping', keywords: ['housekeeping', 'clutter', 'mess', 'spill', 'debris', 'trash', 'untidy'] },
+    { id: 'uc_slippery_surface', label: 'Slippery surface', keywords: ['slippery', 'slick', 'wet', 'oil on floor', 'grease'] },
+    { id: 'uc_uneven_surface', label: 'Uneven surface', keywords: ['uneven', 'pothole', 'grating', 'hole', 'trip', 'rough'] },
+    { id: 'uc_poor_lighting', label: 'Poor lighting', keywords: ['lighting', 'light', 'dark', 'dim', 'illumination', 'visibility', 'lamp'] },
+    { id: 'uc_unsafe_access', label: 'Unsafe access', keywords: ['access', 'walkway', 'catwalk', 'stairs', 'ladder', 'passage', 'egress', 'exit'] },
+    { id: 'uc_blocked_exit', label: 'Blocked emergency exit', keywords: ['exit', 'emergency exit', 'blocked', 'obstructed', 'egress'] },
+    { id: 'uc_electrical_hazard', label: 'Electrical hazard', keywords: ['electrical', 'electric', 'voltage', 'wire', 'exposed', 'panel', 'switch', 'cable'] },
+    { id: 'uc_exposed_wiring', label: 'Exposed wiring', keywords: ['wire', 'wiring', 'cable', 'bare', 'exposed', 'insulation'] },
+    { id: 'uc_fire_hazard', label: 'Fire hazard', keywords: ['fire', 'flammable', 'combustible', 'spark', 'solvent', 'heat', 'ignit'] },
+    { id: 'uc_gas_leak', label: 'Gas leak', keywords: ['gas', 'leak', 'hiss', 'odor', 'smell', 'lel', 'vapor'] },
+    { id: 'uc_hydrocarbon_leak', label: 'Hydrocarbon leak', keywords: ['hydrocarbon', 'oil', 'fuel', 'crude', 'diesel', 'petrol', 'condensate'] },
+    { id: 'uc_chemical_spill', label: 'Chemical spill', keywords: ['chemical', 'spill', 'acid', 'caustic', 'toxic', 'puddle'] },
+    { id: 'uc_corroded_equip', label: 'Corroded equipment', keywords: ['corros', 'rust', 'erosion', 'pitting', 'wall thinning'] },
+    { id: 'uc_high_pressure', label: 'High pressure hazard', keywords: ['pressure', 'high pressure', 'psi', 'bar', 'relief valve'] },
+    { id: 'uc_high_temp', label: 'High temperature hazard', keywords: ['temperature', 'hot', 'thermal', 'heat', 'steam', 'burn'] },
+    { id: 'uc_unprot_machinery', label: 'Unprotected moving machinery', keywords: ['machinery', 'moving', 'rotating', 'unprotected', 'unguarded'] },
+    { id: 'uc_missing_barricade', label: 'Missing barricade', keywords: ['barricade', 'barrier', 'cordon', 'fence', 'tape'] },
+    { id: 'uc_missing_sign', label: 'Missing warning sign', keywords: ['sign', 'signage', 'warning sign', 'caution', 'label'] },
+    { id: 'uc_inadequate_ventilation', label: 'Inadequate ventilation', keywords: ['ventilation', 'exhaust', 'airflow', 'fume', 'stagnant'] },
+    { id: 'uc_confined_space_hazard', label: 'Confined space hazard', keywords: ['confined', 'tank', 'pit', 'manhole', 'asphyx'] },
+    { id: 'uc_fall_hazard', label: 'Fall hazard', keywords: ['fall', 'edge', 'opening', 'drop', 'unprotected edge', 'hole'] },
+    { id: 'uc_dropped_obj_hazard', label: 'Dropped object hazard', keywords: ['dropped', 'falling object', 'overhead', 'loose', 'toeboard'] },
+    { id: 'uc_unsafe_scaffolding', label: 'Unsafe scaffolding', keywords: ['scaffold', 'scaffolding', 'plank', 'handrail', 'clamp', 'green tag'] },
+    { id: 'uc_damaged_ladder', label: 'Damaged ladder', keywords: ['ladder', 'rung', 'step ladder', 'cracked ladder'] },
+    { id: 'uc_structural_damage', label: 'Structural damage', keywords: ['structural', 'structure', 'beam', 'support', 'grating', 'deck', 'sag'] },
+    { id: 'uc_emergency_equip_unavail', label: 'Emergency equipment unavailable', keywords: ['emergency', 'eyewash', 'safety shower', 'first aid', 'stretcher'] },
+    { id: 'uc_fire_exting_unavail', label: 'Fire extinguisher unavailable', keywords: ['extinguisher', 'fire extinguisher', 'co2', 'hose reel', 'depleted'] },
+    { id: 'uc_alarm_malfunction', label: 'Safety alarm malfunction', keywords: ['alarm', 'malfunction', 'detector', 'siren', 'fault', 'trouble'] },
+    { id: 'uc_barrier_failure', label: 'Process safety barrier failure', keywords: ['barrier', 'failure', 'esd', 'psv', 'seal', 'gasket blowout'] },
+    { id: 'uc_inadequate_ppe_avail', label: 'Inadequate PPE availability', keywords: ['ppe', 'unavailable', 'shortage', 'stock', 'supply'] }
+  ]
+};
+
 export default function AIAnalysisView() {
   const [reportType, setReportType] = useState('NEAR_MISS');
   const [description, setDescription] = useState('');
@@ -795,6 +847,11 @@ export default function AIAnalysisView() {
   const [validationError, setValidationError] = useState('');
   const [uploadedIndex, setUploadedIndex] = useState(0);
 
+  // Interactive controls state: Checklist & Search
+  const [showChecklist, setShowChecklist] = useState(false);
+  const [checklistSearch, setChecklistSearch] = useState('');
+  const [selectedChecklist, setSelectedChecklist] = useState([]);
+
   // Auto-saved confirmation state
   const [autoSavedInfo, setAutoSavedInfo] = useState(null);
 
@@ -805,7 +862,59 @@ export default function AIAnalysisView() {
   const [expandedHistoricalRecord, setExpandedHistoricalRecord] = useState(null);
   const [totalStoredRecords, setTotalStoredRecords] = useState(getStoredTotalRecords);
 
+  // Separated Location States (Requirement 10 & 12)
+  const [selectedIncidentLocation, setSelectedIncidentLocation] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [adminLocation, setAdminLocation] = useState(null);
+  const [isRequestingLocation, setIsRequestingLocation] = useState(false);
+  const [showMapModal, setShowMapModal] = useState(false);
+  const [showAdminNavModal, setShowAdminNavModal] = useState(false);
+
+  // Handle Open Map Click with Browser Geolocation Permission (Requirement 2)
+  const handleOpenMapClick = () => {
+    setValidationError('');
+
+    if (!navigator.geolocation) {
+      setShowMapModal(true);
+      return;
+    }
+
+    setIsRequestingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIsRequestingLocation(false);
+        const uLoc = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        };
+        // CRITICAL: User's location is ONLY context, NOT saved as incident location
+        setUserLocation(uLoc);
+        setShowMapModal(true);
+      },
+      (error) => {
+        setIsRequestingLocation(false);
+        // On permission denied / timeout / unavailable, still open map for manual selection
+        setShowMapModal(true);
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  };
+
   useEffect(() => {
+    // 1. Fetch persisted backend reports on mount so historical weak signals and total records are based on real DB data
+    const syncBackendReports = async () => {
+      try {
+        const backendReports = await api.getReports();
+        if (Array.isArray(backendReports) && backendReports.length > 0) {
+          syncBackendReportsToStore(backendReports, [], false);
+          setTotalStoredRecords(getStoredTotalRecords());
+        }
+      } catch (err) {
+        console.warn('Backend reports sync on AIAnalysisView mount deferred:', err.message);
+      }
+    };
+    syncBackendReports();
+
     const handleStorageChange = () => {
       setTotalStoredRecords(getStoredTotalRecords());
     };
@@ -819,12 +928,32 @@ export default function AIAnalysisView() {
     };
   }, []);
 
-  const executeInference = async (textToAnalyze, typeToUse, unitToUse) => {
-    const text = (textToAnalyze || description || '').trim();
+  const executeInference = async (textToAnalyze, typeToUse, unitToUse, checklistToUse) => {
+    const text = (textToAnalyze !== undefined ? textToAnalyze : description).trim();
     const loc = unitToUse || location;
     const rType = typeToUse || reportType;
+    const currentChecklist = checklistToUse !== undefined ? checklistToUse : selectedChecklist;
+    const submittedObservation = [
+      text,
+      ...(currentChecklist || []).map((factor) => `- ${factor}`)
+    ].filter(Boolean).join('\n');
 
-    if (!text) return;
+    // REQUIRE incident location selection before running analysis (Requirement 15)
+    if (!selectedIncidentLocation) {
+      setValidationError('Please select an Incident Location using "Open Map" before running analysis.');
+      setAnalysisResult(null);
+      setIsAnalyzing(false);
+      return;
+    }
+
+    // ALLOW submission when description exists OR at least one checklist factor is selected.
+    // Only reject when BOTH are empty.
+    if (!text && (!currentChecklist || currentChecklist.length === 0)) {
+      setValidationError('Please enter a safety observation or select at least one checklist factor.');
+      setAnalysisResult(null);
+      setIsAnalyzing(false);
+      return;
+    }
 
     setIsAnalyzing(true);
     setAutoSavedInfo(null);
@@ -842,8 +971,8 @@ export default function AIAnalysisView() {
       setAnalysisStep('Phase 4/4: Computing neural risk score & SIF precursor determination...');
     }, 750);
 
-    const isUnrelated = isUnrelatedIssue(text);
-    const reportName = deriveReportName(text, rType, loc);
+    const isUnrelated = isUnrelatedIssue(text, currentChecklist);
+    const reportName = deriveReportName(text, rType, loc, currentChecklist);
 
     // UNRELATED / TRIVIAL INPUT INTERCEPT: Prompt user to enter a correct safety issue
     if (isUnrelated) {
@@ -882,15 +1011,23 @@ export default function AIAnalysisView() {
       return;
     }
 
-    // Try backend AI analysis endpoint for real observations
+    // Execute canonical backend AI analysis
     try {
       const backendResult = await api.executeAiAnalysis({
         report_text: text,
+        description: text,
         report_name: reportName,
         report_type: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+        classification: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
         location: loc,
+        operating_unit: loc,
         site: loc === 'Unit 1' ? 'Plant 01' : loc === 'Unit 2' ? 'Plant 02' : loc === 'Unit 3' ? 'Plant 03' : 'Plant 04',
-        report_date: reportDate
+        report_date: reportDate,
+        incident_latitude: selectedIncidentLocation?.latitude,
+        incident_longitude: selectedIncidentLocation?.longitude,
+        incident_address: selectedIncidentLocation?.address,
+        incident_location_name: selectedIncidentLocation?.name,
+        ...(currentChecklist.length > 0 ? { additional_context: `Safety Factors: ${currentChecklist.join(', ')}` } : {})
       });
 
       if (backendResult) {
@@ -932,10 +1069,12 @@ export default function AIAnalysisView() {
           const isSIF = sifVal === 'YES';
           const dynamicRiskScore = typeof backendResult.sif_potential_score === 'number' 
             ? backendResult.sif_potential_score 
-            : calculateDynamicRiskScore(backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, sifVal, text);
+            : typeof backendResult.risk_score === 'number'
+            ? backendResult.risk_score
+            : calculateDynamicRiskScore(backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, sifVal, text, currentChecklist);
           const confidence = backendResult.confidence !== undefined ? backendResult.confidence : getDynamicConfidence(backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, text);
 
-          const hazards = Array.isArray(backendResult.detected_hazards) && backendResult.detected_hazards.length > 0
+          const rawHazards = Array.isArray(backendResult.detected_hazards) && backendResult.detected_hazards.length > 0
             ? backendResult.detected_hazards
             : [
                 `Hazard: ${backendResult.hazard || 'Insufficient Information'}`,
@@ -943,6 +1082,20 @@ export default function AIAnalysisView() {
                 `Worker Exposure: ${backendResult.worker_exposure || 'Insufficient Information'}`,
                 `Barrier Status: ${backendResult.barrier_status || 'Insufficient Information'}`
               ];
+
+          const hazards = [...rawHazards];
+          if (currentChecklist && currentChecklist.length > 0) {
+            currentChecklist.forEach(factor => {
+              const fWords = factor.toLowerCase().split(/\s+/).filter(w => !['not', 'followed', 'hazard', 'issue'].includes(w));
+              const alreadyCovered = hazards.some(h => {
+                const hl = h.toLowerCase();
+                return hl.includes(factor.toLowerCase()) || (fWords.length > 0 && fWords.some(w => hl.includes(w)));
+              });
+              if (!alreadyCovered) {
+                hazards.push(`Safety Factor: ${factor}`);
+              }
+            });
+          }
 
           const recControls = Array.isArray(backendResult.recommended_controls) && backendResult.recommended_controls.length > 0
             ? backendResult.recommended_controls
@@ -955,37 +1108,48 @@ export default function AIAnalysisView() {
                 'Verify area condition during routine safety inspections'
               ];
 
-          const reasoning = backendResult.explanation || backendResult.why_identified?.summary || getDynamicExplanation(sifVal, backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, text);
+          const reasoning = backendResult.explanation || backendResult.explainable_reasoning || backendResult.why_identified?.summary || getDynamicExplanation(sifVal, backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, text);
 
-          const classifiedType = backendResult.classification || (rType === 'NEAR_MISS' ? 'NEAR MISS' : rType === 'UNSAFE_ACT' ? 'UNSAFE ACT' : 'UNSAFE CONDITION');
           const finalResult = {
             report_name: backendResult.report_name || reportName,
+            report_reference: backendResult.report_reference,
+            description: backendResult.description || submittedObservation,
+            is_duplicate: Boolean(backendResult.is_duplicate),
             sif_precursor: sifVal,
             confidence: confidence,
             risk_score: dynamicRiskScore,
-            classification: classifiedType,
+            classification: rType,
             hazard: backendResult.hazard,
             detected_hazards: hazards,
             energy_source: backendResult.energy_vector || (isSIF ? 'High Potential Energy Vector' : 'Gravity / Kinetic'),
             barrier_status: backendResult.barrier_status || 'Insufficient Information',
-            root_cause: backendResult.root_cause || (backendResult.why_identified?.root_cause) || 'Insufficient Information',
-            iogp_rule: backendResult.life_saving_rule || (isSIF ? 'Line of Fire (LSR-03)' : 'Workplace Housekeeping Standards'),
+            iogp_rule: backendResult.life_saving_rule || backendResult.iogp_rule || (isSIF ? 'Line of Fire (LSR-03)' : 'Workplace Housekeeping Standards'),
             explainable_reasoning: reasoning,
             recommended_controls: recControls,
-            corrective_actions: capaActions
+            corrective_actions: capaActions,
+            weak_signals: backendResult.weak_signals || [],
+            weak_signal_detected: Boolean(backendResult.weak_signal_detected),
+            weak_signal_id: backendResult.weak_signal_id,
+            weak_signal_title: backendResult.weak_signal_title,
+            weak_signal_reason: backendResult.weak_signal_reason,
+            related_reports: backendResult.related_reports || [],
+            escalation_path: backendResult.escalation_path,
+            incident_latitude: backendResult.incident_latitude ?? selectedIncidentLocation?.latitude,
+            incident_longitude: backendResult.incident_longitude ?? selectedIncidentLocation?.longitude,
+            incident_address: backendResult.incident_address || selectedIncidentLocation?.address,
+            incident_location_name: backendResult.incident_location_name || selectedIncidentLocation?.name,
+            incidentLocation: selectedIncidentLocation
           };
 
           setAnalysisResult(finalResult);
 
-          // AUTOMATICALLY PERSIST INTO CENTRAL SAFETY STORE & TOTAL RECORDS
-          const currentRecords = getStoredTotalRecords();
-          const nextRef = `REP-ID001-000${currentRecords.length + 1}`;
-          const newRecordToSave = {
-            id: Date.now(),
-            report_reference: nextRef,
+          // AUTOMATICALLY PERSIST & SYNC INTO CENTRAL SAFETY STORE & TOTAL RECORDS
+          const reportRecordToSync = {
+            id: backendResult.report_id || Date.now(),
+            report_reference: backendResult.report_reference,
             report_name: finalResult.report_name,
-            report_type: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
-            description: text.slice(0, 100),
+            report_type: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+            description: backendResult.description || submittedObservation,
             location: loc,
             facility_unit: `${loc} Active Operations`,
             report_date: reportDate,
@@ -996,23 +1160,25 @@ export default function AIAnalysisView() {
             identified_hazard: finalResult.hazard || 'Operational Hazard',
             energy_source: finalResult.energy_source,
             barrier_status: finalResult.barrier_status,
-            root_cause: finalResult.root_cause,
             recommended_action: recControls[0] || 'Implement critical barrier control.',
-            // Requirement 11: Store separate AI fields for human review compatibility
-            ai_classification: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
+            ai_classification: rType === 'NEAR_MISS' ? 'Near Miss' : rType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition',
             ai_sif_score: dynamicRiskScore,
             ai_confidence: confidence,
             human_classification: null,
             human_sif_score: null,
             reviewer_feedback: null,
-            review_status: 'Pending Review'
+            review_status: 'Pending Review',
+            created_at: backendResult.created_at || new Date().toISOString(),
+            safety_factors: currentChecklist,
+            incident_latitude: finalResult.incident_latitude,
+            incident_longitude: finalResult.incident_longitude,
+            incident_address: finalResult.incident_address,
+            incident_location_name: finalResult.incident_location_name
           };
 
-          const centralSaved = addReportRecord(newRecordToSave);
-          const persistResult = autoPersistToTotalRecords(newRecordToSave);
-          const savedRef = centralSaved?.report?.report_reference || persistResult?.record?.report_reference || nextRef;
-          const savedCount = centralSaved?.totalCount || persistResult?.totalCount || currentRecords.length + 1;
-          setAutoSavedInfo({ reference: savedRef, totalCount: savedCount });
+          syncBackendReportsToStore([reportRecordToSync], [], false);
+          autoPersistToTotalRecords(reportRecordToSync);
+          setAutoSavedInfo({ reference: backendResult.report_reference, totalCount: getStoredTotalRecords().length });
           setTotalStoredRecords(getStoredTotalRecords());
 
           // Auto-sync detected weak signals to Weak Signals Board
@@ -1027,12 +1193,12 @@ export default function AIAnalysisView() {
                 barrier_status: ws.barrier_status || finalResult.barrier_status,
                 potential_sif_precursor: ws.potential_sif_precursor || `Potential SIF Precursor escalation toward ${finalResult.hazard}`,
                 source_reports: [{
-                  report_id: savedRef,
-                  report_type: newRecordToSave.report_type,
-                  date_submitted: newRecordToSave.report_date,
-                  short_description: newRecordToSave.description,
-                  unit: newRecordToSave.location,
-                  excerpt: text
+                  report_id: reportRecordToSync.report_reference || `REC-${reportRecordToSync.id}`,
+                  report_type: reportRecordToSync.report_type,
+                  date_submitted: reportRecordToSync.report_date,
+                  short_description: reportRecordToSync.description,
+                  unit: reportRecordToSync.location,
+                  excerpt: backendResult.description || submittedObservation
                 }]
               });
             });
@@ -1042,127 +1208,123 @@ export default function AIAnalysisView() {
         return;
       }
     } catch (err) {
-      // Fallback to internal dynamic evaluation
-    }
-
-    // INTERNAL DYNAMIC SAFETY OBSERVATION EVALUATION
-    setTimeout(() => {
+      // Direct backend failure - clear mock fallback, display explicit validation/server error
       setIsAnalyzing(false);
       setAnalysisStep('');
-
-      const dynamicAnalysis = analyzeSafetyObservation(text, rType);
-      const sifVal = dynamicAnalysis.sifPrecursor;
-      const isSIF = sifVal === 'YES';
-
-      const classifiedType = dynamicAnalysis.classification || (rType === 'NEAR_MISS' ? 'NEAR MISS' : rType === 'UNSAFE_ACT' ? 'UNSAFE ACT' : 'UNSAFE CONDITION');
-      const finalResult = {
-        report_name: reportName,
-        sif_precursor: sifVal,
-        confidence: dynamicAnalysis.confidence,
-        risk_score: dynamicAnalysis.riskScore,
-        classification: classifiedType,
-        hazard: dynamicAnalysis.hazard,
-        detected_hazards: dynamicAnalysis.detectedHazards,
-        energy_source: dynamicAnalysis.energyVector,
-        barrier_status: dynamicAnalysis.barrierStatus,
-        root_cause: dynamicAnalysis.rootCause,
-        iogp_rule: isSIF ? 'Critical Safety Standard' : 'Workplace Housekeeping Standards',
-        explainable_reasoning: dynamicAnalysis.explanation,
-        recommended_controls: dynamicAnalysis.recommendations,
-        corrective_actions: [
-          'Log observation in routine facility maintenance register for supervisor review',
-          'Verify area condition during regular shift safety inspections'
-        ]
-      };
-
-      setAnalysisResult(finalResult);
-
-      // AUTOMATICALLY PERSIST INTO CENTRAL SAFETY STORE & TOTAL RECORDS
-      const currentRecords = getStoredTotalRecords();
-      const nextRef = `REP-ID001-000${currentRecords.length + 1}`;
-      const newRecordToSave = {
-        id: Date.now(),
-        report_reference: nextRef,
-        report_name: finalResult.report_name,
-        report_type: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
-        description: text.slice(0, 100),
-        location: loc,
-        facility_unit: `${loc} Operating Bay`,
-        report_date: reportDate,
-        risk_level: isSIF ? 'Critical' : 'Low',
-        sif_precursor_assessment: sifVal,
-        ai_score: finalResult.risk_score,
-        status: isSIF ? 'Action Required' : 'Under Review',
-        identified_hazard: finalResult.hazard || 'Operational Hazard',
-        energy_source: finalResult.energy_source,
-        barrier_status: finalResult.barrier_status,
-        root_cause: finalResult.root_cause,
-        recommended_action: finalResult.recommended_controls[0] || 'Implement critical barrier control.',
-        // Requirement 11: Store separate AI fields for human review compatibility
-        ai_classification: classifiedType === 'NEAR MISS' ? 'Near Miss' : classifiedType === 'UNSAFE ACT' ? 'Unsafe Act' : 'Unsafe Condition',
-        ai_sif_score: finalResult.risk_score,
-        ai_confidence: finalResult.confidence,
-        human_classification: null,
-        human_sif_score: null,
-        reviewer_feedback: null,
-        review_status: 'Pending Review'
-      };
-
-      const centralSaved = addReportRecord(newRecordToSave);
-      const persistResult = autoPersistToTotalRecords(newRecordToSave);
-      const savedRef = centralSaved?.report?.report_reference || persistResult?.record?.report_reference || nextRef;
-      const savedCount = centralSaved?.totalCount || persistResult?.totalCount || currentRecords.length + 1;
-      setAutoSavedInfo({ reference: savedRef, totalCount: savedCount });
-      setTotalStoredRecords(getStoredTotalRecords());
-
-    }, 850);
+      setValidationError(err.message || 'AI analysis request failed. Please check backend connection.');
+      setAnalysisResult(null);
+      return;
+    }
   };
 
   const handleReset = () => {
     setDescription('');
     setLocation('Unit 1');
+    setSelectedIncidentLocation(null);
     setAnalysisResult(null);
     setAnalysisStep('');
     setAutoSavedInfo(null);
     setValidationError('');
+    setShowChecklist(false);
+    setChecklistSearch('');
+    setSelectedChecklist([]);
   };
+
+  const toggleChecklistItem = (itemLabel) => {
+    setSelectedChecklist((prev) =>
+      prev.includes(itemLabel)
+        ? prev.filter((label) => label !== itemLabel)
+        : [...prev, itemLabel]
+    );
+    if (validationError) setValidationError('');
+    if (analysisResult) setAnalysisResult(null);
+  };
+
+  const currentCategoryChecklist = CLASSIFICATION_CHECKLISTS[reportType] || CLASSIFICATION_CHECKLISTS.NEAR_MISS;
+  const descLower = (description || '').toLowerCase();
+  const searchLower = checklistSearch.trim().toLowerCase();
+
+  const filteredChecklistOptions = currentCategoryChecklist
+    .map((item) => {
+      const isRelevant = Boolean(
+        descLower.trim() && item.keywords.some((kw) => descLower.includes(kw))
+      );
+      return { ...item, isRelevant };
+    })
+    .filter((item) => {
+      if (!searchLower) return true;
+      return item.label.toLowerCase().includes(searchLower);
+    });
 
   const handleRunAnalysis = async () => {
-    setValidationError('');
-    let textToAnalyze = description.trim().slice(0, 100);
-    let typeToUse = reportType;
-    let unitToUse = location;
+    const trimmedDescription = description.trim();
 
-    // If user has not typed anything, use the available uploaded safety report data
-    if (!textToAnalyze) {
-      const selectedUploaded = AVAILABLE_UPLOADED_REPORTS[uploadedIndex % AVAILABLE_UPLOADED_REPORTS.length];
-      textToAnalyze = selectedUploaded.text.slice(0, 100);
-      typeToUse = selectedUploaded.type;
-      unitToUse = selectedUploaded.location;
-      
-      setDescription(textToAnalyze);
-      setReportType(typeToUse);
-      setLocation(unitToUse);
-      setUploadedIndex(prev => prev + 1);
+    // Check Incident Location requirement (Requirement 15)
+    if (!selectedIncidentLocation) {
+      setValidationError('Please select an Incident Location using "Open Map" before running analysis.');
+      setAnalysisResult(null);
+      return;
     }
 
-    setValidationError(null);
+    // ALLOW submission when description exists OR at least one checklist factor is selected.
+    // Only reject when BOTH are empty.
+    if (!trimmedDescription && (!selectedChecklist || selectedChecklist.length === 0)) {
+      setValidationError('Please enter a safety observation or select at least one checklist factor.');
+      setAnalysisResult(null);
+      return;
+    }
 
-    await executeInference(textToAnalyze, typeToUse, unitToUse);
+    setValidationError('');
+
+    await executeInference(trimmedDescription, reportType, location, selectedChecklist);
   };
 
-  const isUnrelated = isUnrelatedIssue(description);
+  const isUnrelated = isUnrelatedIssue(description, selectedChecklist);
   const isNonSafety = isUnrelated || analysisResult?.is_unrelated || analysisResult?.risk_score === 0 || analysisResult?.report_name?.includes('Non-Safety') || analysisResult?.report_name?.includes('Enter Correct Issue');
 
-  const allWeakSignals = generateAllWeakSignalsAnalysis(
-    totalStoredRecords,
-    analysisResult,
-    description,
-    location
-  );
+  // Dynamic Weak Signals from Backend DB (enforces >= 2 observations, strictly 0 for isolated/first event)
+  const backendWeakSignals = (analysisResult?.weak_signals || []).map(ws => {
+    const rawReports = (Array.isArray(ws.source_reports) && ws.source_reports.length > 0)
+      ? ws.source_reports
+      : (Array.isArray(ws.related_reports) ? ws.related_reports : []);
 
-  // Weak signals detected in the CURRENT record (strictly empty if non-safety/unrelated input!)
-  const detectedWeakSignals = isNonSafety ? [] : allWeakSignals.filter(s => s.isPresentInCurrent);
+    const identifyingRecords = rawReports.length > 0
+      ? rawReports.map((r, idx) => ({
+          ref: r.report_id || r.report_reference || `REC-${r.id || idx+1}`,
+          name: r.short_description || r.report_name || r.identified_hazard || 'Operational Safety Report',
+          unit: r.unit || r.location || ws.unit || 'Operating Unit',
+          date: r.date_submitted || r.report_date || '2026-09-08',
+          role: idx === 0 ? 'Active Trigger Record' : 'Historical Correlated Record',
+          excerpt: r.excerpt || r.description || r.short_description || ''
+        }))
+      : [
+          {
+            ref: analysisResult?.report_reference || 'Current Record',
+            name: analysisResult?.report_name || 'Active Safety Report',
+            unit: location || 'Operating Unit',
+            date: new Date().toISOString().split('T')[0],
+            role: 'Active Trigger Record',
+            excerpt: analysisResult?.description || description || selectedChecklist.map((factor) => `- ${factor}`).join('\n')
+          }
+        ];
+
+    return {
+      id: ws.id || ws.signal_id,
+      code: ws.signal_id || 'WS-001',
+      category: ws.category || ws.detected_hazard || 'Process Safety Management',
+      title: ws.title,
+      severity: ws.risk_level || (ws.risk_score >= 80 ? 'Critical Risk' : 'High Risk'),
+      isPresentInCurrent: true,
+      identifyingRecords,
+      presentRecordObservation: analysisResult?.description || description || selectedChecklist.map((factor) => `- ${factor}`).join('\n'),
+      precursorEscalation: ws.escalation_path || `Potential escalation path: ${ws.detected_hazard || 'uncontrolled release'} leading to increased severity.`,
+      systemicMitigation: ws.recommended_action || (ws.barrier_issue ? `1. Restore and verify critical barrier: ${ws.barrier_issue}.\n2. Conduct targeted inspection of ${ws.unit || 'affected area'}.\n3. Issue safety alert for recurring pattern.` : '1. Conduct targeted area walkdown.\n2. Verify operational controls.\n3. Track barrier degradation.'),
+      why_identified: ws.reason || ws.detection_reason || `Recurring pattern identified based on ${ws.recurrence_count || identifyingRecords.length} related observations.`
+    };
+  });
+
+  const detectedWeakSignals = isNonSafety ? [] : (analysisResult?.weak_signals !== undefined ? backendWeakSignals : []);
+  const allWeakSignals = detectedWeakSignals;
 
   const openWeakSignalsModal = () => {
     const match = detectedWeakSignals[0];
@@ -1204,7 +1366,7 @@ export default function AIAnalysisView() {
                 <FileText className="w-6 h-6 text-[#FF5A36]" />
                 <span>SAFETY OBSERVATION INPUT</span>
               </h3>
-              {(description || location !== 'Unit 1' || analysisResult) ? (
+              {(description || location !== 'Unit 1' || selectedChecklist.length > 0 || analysisResult) ? (
                 <button
                   type="button"
                   onClick={handleReset}
@@ -1310,9 +1472,178 @@ export default function AIAnalysisView() {
                 placeholder="Describe safety incident (up to 100 characters max)..."
               />
             </div>
+
+            {/* Interactive Controls: Checklist with Search */}
+            <div className="space-y-3 pt-1">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                {/* Checklist Toggle Button */}
+                <button
+                  type="button"
+                  id="toggle-checklist-btn"
+                  onClick={() => setShowChecklist((prev) => !prev)}
+                  className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold font-mono tracking-wide transition-all cursor-pointer flex items-center gap-2 border-2 ${
+                    showChecklist
+                      ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                      : 'bg-[#FAF8F5] text-slate-700 border-stone-200/90 hover:bg-stone-100 hover:border-stone-300 hover:text-slate-900'
+                  }`}
+                  title={showChecklist ? 'Hide safety factors checklist' : 'Display safety factors checklist'}
+                >
+                  <CheckSquare className="w-3.5 h-3.5 text-[#FF5A36]" />
+                  <span>Checklist</span>
+                  {selectedChecklist.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-[#FF5A36] text-white">
+                      {selectedChecklist.length}
+                    </span>
+                  )}
+                  <span className="text-[10px] font-mono ml-0.5">{showChecklist ? '▲' : '▼'}</span>
+                </button>
+              </div>
+
+              {/* Expandable Panel: Dynamic Safety Factors Checklist with Search Bar */}
+              {showChecklist && (
+                <div 
+                  id="safety-factors-checklist-panel"
+                  className="p-4 sm:p-5 rounded-xl bg-[#FAF8F5] border-2 border-stone-200 text-slate-800 space-y-3 animate-in fade-in duration-200 shadow-xs"
+                >
+                  {/* Panel Top: Title & Classification indicator */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-800 font-heading">
+                        Select Safety Factors
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-[#FF5A36] uppercase px-2 py-0.5 bg-orange-100/80 rounded-md">
+                        {reportType === 'NEAR_MISS' ? 'Near Miss' : reportType === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition'}
+                      </span>
+                    </div>
+                    {selectedChecklist.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedChecklist([])}
+                        className="text-[11px] font-mono font-bold text-[#FF5A36] hover:text-orange-700 underline cursor-pointer"
+                      >
+                        Clear All ({selectedChecklist.length})
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Search Bar Input */}
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={checklistSearch}
+                      onChange={(e) => setChecklistSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.preventDefault();
+                      }}
+                      placeholder="Search safety factors..."
+                      className="w-full pl-9 pr-8 py-2 rounded-lg bg-white border border-stone-200 text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:border-[#FF5A36] focus:ring-2 focus:ring-[#FF5A36]/20 transition-all placeholder:text-slate-400"
+                    />
+                    {checklistSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setChecklistSearch('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5 rounded cursor-pointer"
+                        title="Clear search"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Scrollable Checklist Options Grid */}
+                  <div className="max-h-64 sm:max-h-72 overflow-y-auto pr-1">
+                    {filteredChecklistOptions.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {filteredChecklistOptions.map((opt) => {
+                          const isSelected = selectedChecklist.includes(opt.label);
+                          const isSuggested = opt.isRelevant;
+                          return (
+                            <label
+                              key={opt.id}
+                              className={`flex items-center gap-2.5 p-2.5 rounded-lg border text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none ${
+                                isSelected
+                                  ? 'bg-orange-50/90 border-[#FF5A36] text-slate-900 shadow-2xs font-bold'
+                                  : 'bg-white border-stone-200/90 text-slate-700 hover:bg-stone-50 hover:border-stone-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleChecklistItem(opt.label)}
+                                className="sr-only"
+                              />
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                                isSelected 
+                                  ? 'bg-[#FF5A36] border-[#FF5A36] text-white' 
+                                  : 'border-slate-300 bg-white'
+                              }`}>
+                                {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                              </div>
+                              <span className="flex-1 leading-snug">{opt.label}</span>
+                              {isSuggested && !isSelected && (
+                                <span className="text-[10px] font-mono font-bold text-orange-600 bg-orange-100/80 px-1.5 py-0.5 rounded shrink-0">
+                                  Relevant
+                                </span>
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="py-8 text-center text-xs sm:text-sm font-semibold text-slate-400 bg-white rounded-lg border border-dashed border-stone-200">
+                        No matching safety factors
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Panel Footer: Selected Count */}
+                  <div className="pt-2 border-t border-stone-200 flex items-center justify-between text-xs font-mono text-slate-500">
+                    <span>
+                      Showing {filteredChecklistOptions.length} of {currentCategoryChecklist.length} factors
+                    </span>
+                    <span className="font-bold text-slate-700">
+                      {selectedChecklist.length} selected
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Large Action Button with Validation Error Banner */}
+          {/* Confirmed Incident Location Display in the Form (Requirement 5) */}
+          {selectedIncidentLocation && (
+            <div className="p-3.5 rounded-2xl bg-orange-50/90 border-2 border-orange-300 shadow-2xs space-y-1 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] font-black uppercase tracking-wider text-orange-900 font-mono flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-[#FF5A36]" />
+                  <span>INCIDENT LOCATION</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenMapClick}
+                  className="text-[11px] font-bold text-orange-700 hover:text-orange-950 underline cursor-pointer"
+                >
+                  Change Location
+                </button>
+              </div>
+              <div className="text-sm font-black text-slate-900">
+                {selectedIncidentLocation.name || 'Industrial Facility Point'}
+              </div>
+              <div className="text-xs font-mono font-semibold text-slate-600 flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded bg-white border border-orange-200 text-slate-800">
+                  📍 {selectedIncidentLocation.latitude.toFixed(4)}, {selectedIncidentLocation.longitude.toFixed(4)}
+                </span>
+                {selectedIncidentLocation.address && selectedIncidentLocation.address !== selectedIncidentLocation.name && (
+                  <span className="truncate max-w-xs text-slate-500 font-sans text-[11px]">
+                    {selectedIncidentLocation.address}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Action Buttons: [ 📍 Open Map ]       [ RUN AI SAFETY ANALYSIS → ] */}
           <div className="pt-2 space-y-3">
             {validationError && (
               <div className="p-4 rounded-xl bg-rose-50 border-2 border-rose-300 text-rose-900 text-xs sm:text-sm font-semibold flex items-start gap-3 shadow-xs animate-in fade-in duration-200">
@@ -1326,25 +1657,41 @@ export default function AIAnalysisView() {
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={handleRunAnalysis}
-              disabled={isAnalyzing}
-              className="w-full py-4 sm:py-5 px-6 rounded-xl font-black text-base sm:text-lg tracking-wider uppercase shadow-lg transition-all flex items-center justify-center gap-3 bg-gradient-to-r from-[#FF6B4A] via-[#FF5A36] to-[#FFA133] hover:opacity-95 text-white shadow-orange-500/30 hover:scale-[1.01] active:scale-[0.99] cursor-pointer disabled:opacity-60"
-            >
-              {isAnalyzing ? (
-                <div className="flex items-center gap-3">
-                  <span className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span className="normal-case text-base sm:text-lg">{analysisStep || 'Running AI Safety Analysis...'}</span>
-                </div>
-              ) : (
-                <>
-                  <Cpu className="w-6 h-6 text-white" />
-                  <span>RUN AI SAFETY ANALYSIS</span>
-                  <ArrowRight className="w-6 h-6 ml-1" />
-                </>
-              )}
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+              <button
+                type="button"
+                onClick={handleOpenMapClick}
+                disabled={isRequestingLocation || isAnalyzing}
+                className={`sm:col-span-4 py-4 sm:py-5 px-4 rounded-xl font-black text-xs sm:text-sm tracking-wider uppercase shadow-md transition-all flex items-center justify-center gap-2 border-2 cursor-pointer disabled:opacity-60 ${
+                  selectedIncidentLocation
+                    ? 'bg-orange-50 hover:bg-orange-100 text-orange-900 border-orange-300'
+                    : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-300 hover:border-[#FF5A36] hover:text-[#FF5A36]'
+                }`}
+              >
+                <MapPin className="w-5 h-5 text-[#FF5A36] shrink-0" />
+                <span>{isRequestingLocation ? 'Locating...' : selectedIncidentLocation ? 'Edit Map' : 'Open Map'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRunAnalysis}
+                disabled={isAnalyzing}
+                className="sm:col-span-8 py-4 sm:py-5 px-6 rounded-xl font-black text-sm sm:text-base tracking-wider uppercase shadow-lg transition-all flex items-center justify-center gap-3 bg-gradient-to-r from-[#FF6B4A] via-[#FF5A36] to-[#FFA133] hover:opacity-95 text-white shadow-orange-500/30 hover:scale-[1.01] active:scale-[0.99] cursor-pointer disabled:opacity-60"
+              >
+                {isAnalyzing ? (
+                  <div className="flex items-center gap-3">
+                    <span className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span className="normal-case text-base sm:text-lg">{analysisStep || 'Running AI Safety Analysis...'}</span>
+                  </div>
+                ) : (
+                  <>
+                    <Cpu className="w-6 h-6 text-white" />
+                    <span>RUN AI SAFETY ANALYSIS</span>
+                    <ArrowRight className="w-6 h-6 ml-1" />
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1416,6 +1763,9 @@ export default function AIAnalysisView() {
                         setDescription(sample.text);
                         setReportType(sample.type);
                         setLocation(sample.location);
+                        if (sample.incidentLocation) {
+                          setSelectedIncidentLocation(sample.incidentLocation);
+                        }
                         setUploadedIndex(prev => prev + 1);
                         setValidationError('');
                         setAnalysisResult(null);
@@ -1471,8 +1821,22 @@ export default function AIAnalysisView() {
                             {analysisResult.report_name}
                           </div>
 
-                          {/* Type, SIF status, and Confidence */}
+                          {/* Type, SIF status, Reference, Duplicate, and Confidence */}
                           <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                            {/* Report Reference Badge */}
+                            {analysisResult.report_reference && (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-black font-mono tracking-wide uppercase bg-blue-700 text-white shadow-xs">
+                                REF: {analysisResult.report_reference}
+                              </span>
+                            )}
+
+                            {/* Reused Duplicate Badge */}
+                            {analysisResult.is_duplicate && (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-black font-mono tracking-wide uppercase bg-purple-700 text-white shadow-xs">
+                                REUSED DUPLICATE
+                              </span>
+                            )}
+
                             {/* Report Type Badge */}
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-black font-mono tracking-wide uppercase bg-slate-800 text-white shadow-xs">
                               TYPE: {analysisResult.classification.replace('_', ' ')}
@@ -1522,22 +1886,24 @@ export default function AIAnalysisView() {
                     </div>
                   </div>
 
-                  {/* Root Cause Analysis Card */}
-                  {analysisResult.root_cause && (
-                    <div className="rounded-2xl border-2 border-stone-200 p-4 shadow-xs bg-white">
-                      <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/90 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-100/90 border border-amber-300 text-amber-900 text-xs font-black uppercase tracking-wider font-mono shadow-xs">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
-                            ROOT CAUSE ANALYSIS
-                          </span>
-                        </div>
-                        <p className="text-xs sm:text-sm font-bold text-slate-800 leading-relaxed pt-0.5">
-                          {analysisResult.root_cause}
-                        </p>
-                      </div>
-                    </div>
-                  )}
+                  {/* Incident Location Map with Risk-Colored Marker & Admin Navigation (Requirement 7 & 8) */}
+                  <IncidentPostAnalysisMap
+                    incidentLocation={analysisResult.incidentLocation || selectedIncidentLocation || {
+                      latitude: analysisResult.incident_latitude || 12.9716,
+                      longitude: analysisResult.incident_longitude || 77.5946,
+                      name: analysisResult.incident_location_name || analysisResult.location || 'Crude Distillation Unit',
+                      address: analysisResult.incident_address || `${analysisResult.incident_location_name || 'Industrial Facility'} Area`
+                    }}
+                    riskScore={analysisResult.risk_score}
+                    riskLevel={
+                      analysisResult.risk_score > 66 ? 'High Risk' :
+                      analysisResult.risk_score >= 33 ? 'Medium Risk' : 'Low Risk'
+                    }
+                    incidentType={analysisResult.classification || reportType}
+                    reportName={analysisResult.report_name}
+                    onNavigate={() => setShowAdminNavModal(true)}
+                    isAdmin={true}
+                  />
 
                   {/* Section 2: Detected Hazards & Energy Vectors */}
                   <div className="rounded-2xl border-2 border-stone-200 p-4 shadow-xs bg-white">
@@ -1754,7 +2120,7 @@ export default function AIAnalysisView() {
                       })}
                       className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF6B4A] to-[#FF5A36] hover:from-[#ff5934] hover:to-[#e64a27] text-white font-bold text-xs shadow-md shadow-orange-500/20 shrink-0 cursor-pointer flex items-center gap-1.5 transition-all self-start sm:self-auto"
                     >
-                      <span>Examine Weak Signal Dossier</span>
+                      <span>View Details</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1788,6 +2154,41 @@ export default function AIAnalysisView() {
           onClose={() => setSelectedDossierReport(null)}
         />
       )}
+
+      {/* Incident Location Selection Modal (Requirement 3) */}
+      <IncidentLocationModal
+        isOpen={showMapModal}
+        onClose={() => setShowMapModal(false)}
+        initialLocation={selectedIncidentLocation}
+        userLocation={userLocation}
+        onConfirm={(loc) => {
+          setSelectedIncidentLocation(loc);
+          if (loc.name) {
+            setLocation(loc.name);
+          }
+          if (validationError) {
+            setValidationError('');
+          }
+        }}
+      />
+
+      {/* Admin Incident Navigation Modal (Requirement 8 & 9) */}
+      <AdminNavigationModal
+        isOpen={showAdminNavModal}
+        onClose={() => setShowAdminNavModal(false)}
+        incidentLocation={analysisResult?.incidentLocation || selectedIncidentLocation || {
+          latitude: analysisResult?.incident_latitude || 12.9716,
+          longitude: analysisResult?.incident_longitude || 77.5946,
+          name: analysisResult?.incident_location_name || analysisResult?.location || 'Crude Distillation Unit',
+          address: analysisResult?.incident_address || 'Refinery Operating Sector'
+        }}
+        riskScore={analysisResult?.risk_score || 50}
+        riskLevel={
+          (analysisResult?.risk_score || 50) > 66 ? 'High Risk' :
+          (analysisResult?.risk_score || 50) >= 33 ? 'Medium Risk' : 'Low Risk'
+        }
+        incidentType={analysisResult?.classification || reportType}
+      />
 
     </div>
   );

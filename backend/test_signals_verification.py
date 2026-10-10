@@ -4,7 +4,7 @@ import os
 # Ensure backend package is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.app.database import SessionLocal, Base, engine
+from backend.app.database import SessionLocal, Base, engine, ensure_emergency_schema
 from backend.app.seed_data import seed_sample_data
 from backend.app.ai_services.sif_ml_inference import predict_sif_potential
 from backend.app.models.weak_signal import WeakSignalReview
@@ -25,7 +25,7 @@ def test_all():
     assert ml_res.get("status") == "SUCCESS", "ML prediction failed!"
 
     print("\n=== 2. Verifying DB Tables & Weak Signal Service ===")
-    Base.metadata.create_all(bind=engine)
+    ensure_emergency_schema()
     seed_sample_data()
     db = SessionLocal()
     try:
