@@ -2635,20 +2635,6 @@ export default function MobileSafetyApp() {
                     </button>
                   </div>
 
-                  {/* Database Storage Confirmation Banner */}
-                  <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <div>
-                        <span className="text-xs font-bold block">{aiAnalysisModalData.report_number} Recorded</span>
-                        <span className="text-[10px] text-emerald-700">Persisted in Central Safety Database</span>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-mono font-bold bg-white text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200">
-                      STORED
-                    </span>
-                  </div>
-
                   {/* SIF Status Banner */}
                   <div className={`p-4 rounded-2xl border ${
                     aiAnalysisModalData.is_sif 
