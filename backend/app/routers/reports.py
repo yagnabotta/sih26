@@ -48,6 +48,11 @@ def submit_report(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Please describe the safety observation in detail."
         )
+    if len(payload.description) > 999999:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Field description exceeds maximum allowed length of 999,999 characters."
+        )
     if not payload.location or len(payload.location.strip()) < 2:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

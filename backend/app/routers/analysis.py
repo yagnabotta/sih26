@@ -17,8 +17,8 @@ router = APIRouter(prefix="/api/analysis", tags=["AI Analysis"])
 ai_analysis_router = APIRouter(prefix="/api/ai-analysis", tags=["AI Analysis"])
 
 class LiveAnalysisRequest(BaseModel):
-    report_text: Optional[str] = ""
-    description: Optional[str] = ""
+    report_text: Optional[str] = Field(default="", max_length=999999)
+    description: Optional[str] = Field(default="", max_length=999999)
     report_name: Optional[str] = None
     report_type: Optional[str] = None
     classification: Optional[str] = None
@@ -99,6 +99,12 @@ def generate_dynamic_recommendations(hazard: Optional[str], text: str) -> List[s
 
 def handle_live_analysis(payload: LiveAnalysisRequest) -> Dict[str, Any]:
     raw_text = (payload.report_text or payload.description or "").strip()
+    
+    if len(raw_text) > 999999:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Field description exceeds maximum allowed length of 999,999 characters."
+        )
     
     # Check for checklist items
     checklist_items = payload.checklist or payload.selected_checklist or []
@@ -282,6 +288,11 @@ def analyze_safety_observation(
     Accepts checklist-only, description-only, or combined observations.
     """
     text = (payload.report_text or "").strip()
+    if len(text) > 999999:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Field description exceeds maximum allowed length of 999,999 characters."
+        )
 
     # Safely extract checklist_items from additional_context regardless of combination
     checklist_items: List[str] = []

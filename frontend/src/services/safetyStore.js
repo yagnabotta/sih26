@@ -218,9 +218,9 @@ export async function ingestBatchReports(rawRecords, replaceExisting = true) {
     const reportDate = row.Date || row.date || todayStr;
     const site = row.Site || row.site || row.location || 'Unit 1';
     const reportType = row['Report Type'] || row.report_type || row.type || 'Near Miss';
-    // Gracefully handle descriptions (trim and limit to 100 chars without dropping records)
+    // Gracefully handle descriptions (trim and limit to 999,999 chars without dropping records)
     const rawDesc = (row.Description || row.description || row.desc || row.Observation || row.observation || '').trim();
-    const description = rawDesc.slice(0, 100) || 'Safety observation reported for evaluation.';
+    const description = rawDesc.slice(0, 999999) || 'Safety observation reported for evaluation.';
     const hazard = row.Hazard || row.hazard || row.Risk || 'Operational Safety Finding';
 
     const evalResult = evaluateSIFPrecursor(description, hazard, reportType);
@@ -964,8 +964,8 @@ export function addReportRecord(reportData) {
   const { reports, precursors } = getStoreState();
   const todayStr = getTodayDateString();
 
-  // Enforce 100 character limit on description
-  const cleanDesc = (reportData.description || '').trim().slice(0, 100);
+  // Enforce 999,999 character limit on description
+  const cleanDesc = (reportData.description || '').trim().slice(0, 999999);
   const nextRef = reportData.report_reference || `REP-${todayStr.replace(/-/g, '')}-${String(reports.length + 1).padStart(4, '0')}`;
   const isSIF = reportData.sif_precursor_assessment === 'YES' || reportData.isSIF === true;
   const riskScore = typeof reportData.ai_score === 'number' ? reportData.ai_score : (typeof reportData.risk_score === 'number' ? reportData.risk_score : (isSIF ? 90 : 0));

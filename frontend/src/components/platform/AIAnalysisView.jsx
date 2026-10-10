@@ -1049,6 +1049,14 @@ export default function AIAnalysisView() {
       return;
     }
 
+    // Reject when input exceeds 999,999 characters
+    if (text && text.length > 999999) {
+      setValidationError('Field explanation exceeds maximum limit of 999,999 characters.');
+      setAnalysisResult(null);
+      setIsAnalyzing(false);
+      return;
+    }
+
     // Respect manual category selection when text description is entered (do not assume!)
     let determinedCategory = typeToUse || reportType;
     if (!text && currentChecklist && currentChecklist.length > 0) {
@@ -1383,6 +1391,12 @@ export default function AIAnalysisView() {
       return;
     }
 
+    if (trimmedDescription && trimmedDescription.length > 999999) {
+      setValidationError('Field explanation exceeds maximum limit of 999,999 characters.');
+      setAnalysisResult(null);
+      return;
+    }
+
     setValidationError('');
 
     let typeToUse = reportType;
@@ -1631,16 +1645,16 @@ export default function AIAnalysisView() {
                   <label className="block text-xs sm:text-sm font-black uppercase tracking-wider text-slate-800 font-heading">
                     DETAILED FIELD EXPLANATION
                   </label>
-                  <span className={`text-xs sm:text-sm font-mono font-black ${description.length >= 100 ? 'text-[#FF5A36]' : 'text-slate-500'}`}>
-                    {description.length} / 100 CHARACTERS
+                  <span className={`text-xs sm:text-sm font-mono font-black ${description.length >= 999999 ? 'text-[#FF5A36]' : 'text-slate-500'}`}>
+                    {description.length} / 999999 CHARACTERS
                   </span>
                 </div>
                 <textarea
                   rows={5}
-                  maxLength={100}
+                  maxLength={999999}
                   value={description}
                   onChange={(e) => {
-                    const val = e.target.value.slice(0, 100);
+                    const val = e.target.value.slice(0, 999999);
                     setDescription(val);
                     if (validationError) setValidationError('');
                     if (analysisResult) setAnalysisResult(null);

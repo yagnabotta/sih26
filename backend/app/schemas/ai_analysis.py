@@ -25,7 +25,7 @@ class AIAnalysisResponse(BaseModel):
         from_attributes = True
 
 class AIAnalysisRequest(BaseModel):
-    report_text: str = Field(default="", description="Field description of safety observation")
+    report_text: str = Field(default="", max_length=999999, description="Field description of safety observation")
     report_name: Optional[str] = None
     report_type: Optional[str] = Field(default="NEAR_MISS", description="UNSAFE_ACT, UNSAFE_CONDITION, NEAR_MISS")
     location: Optional[str] = Field(default="Unit 1")
