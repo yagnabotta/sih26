@@ -63,7 +63,7 @@ def classify_incident_category(text: str) -> Dict[str, Any]:
 
     # 2. Unsafe Act Patterns (Human behavior, procedure non-compliance, PPE non-use, risky actions)
     unsafe_act_patterns = [
-        (r'\b(not\s*wearing|without\s*(wearing|ppe|harness|helmet|glasses|gloves)|failed\s*to\s*wear|improper\s*ppe|removed\s*ppe)\b', 'PPE omission or improper personal protective equipment usage'),
+        (r'\b(not\s*wearing|without\s*(wearing|ppe|harness|helmet|glasses|gloves)|failed\s*to\s*wear|improper\s*ppe|removed\s*ppe|missing\s*(?:safety\s*)?gear|no\s*safety\s*gear)\b', 'PPE omission or improper personal protective equipment usage'),
         (r'\b(procedure\s*not\s*followed|ptw\s*violation|permit\s*violation|without\s*permit|unauthorized\s*operation|no\s*ptw)\b', 'Procedure, permit-to-work, or protocol non-compliance'),
         (r'\b(bypassed|bypassing|interlock\s*disabled|tampered\s*with|overrode|defeated\s*safety)\b', 'Intentional bypassing or tampering with safety controls'),
         (r'\b(speeding|excessive\s*speed|driving\s*recklessly|cell\s*phone|phone\s*distraction|mobile\s*use)\b', 'Unsafe operational behavior or operator distraction'),

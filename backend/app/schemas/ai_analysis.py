@@ -25,13 +25,15 @@ class AIAnalysisResponse(BaseModel):
         from_attributes = True
 
 class AIAnalysisRequest(BaseModel):
-    report_text: str = Field(default="", description="Field description of safety observation")
+    report_text: str = Field(default="", max_length=999999, description="Field description of safety observation")
     report_name: Optional[str] = None
     report_type: Optional[str] = Field(default="NEAR_MISS", description="UNSAFE_ACT, UNSAFE_CONDITION, NEAR_MISS")
     location: Optional[str] = Field(default="Unit 1")
     site: Optional[str] = None
     report_date: Optional[str] = None
     additional_context: Optional[Union[str, List[str]]] = None
+    checklist: Optional[List[str]] = None
+    selected_checklist: Optional[List[str]] = None
     legacy_scoring: Optional[bool] = Field(default=False, description="Enable legacy additive MAUT risk scoring model for comparison")
     incident_latitude: Optional[float] = Field(None, ge=-90.0, le=90.0)
     incident_longitude: Optional[float] = Field(None, ge=-180.0, le=180.0)
@@ -50,6 +52,10 @@ class AIAnalysisRequest(BaseModel):
                 values["report_type"] = values.get("classification") or "NEAR_MISS"
             if isinstance(values.get("additional_context"), list):
                 values["additional_context"] = f"Safety Factors: {', '.join(str(x) for x in values['additional_context'])}"
+            elif not values.get("additional_context"):
+                items = values.get("checklist") or values.get("selected_checklist")
+                if items and isinstance(items, list):
+                    values["additional_context"] = f"Safety Factors: {', '.join(str(x) for x in items)}"
         return values
 
 class AIAnalysisExecuteResponse(BaseModel):

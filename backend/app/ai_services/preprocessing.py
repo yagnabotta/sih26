@@ -109,6 +109,8 @@ def mask_pii(text: str) -> str:
     nlp = get_spacy_nlp()
     if nlp is not None and hasattr(nlp, "pipe_names") and "ner" in nlp.pipe_names:
         try:
+            if hasattr(nlp, "max_length") and len(result) > nlp.max_length:
+                nlp.max_length = max(nlp.max_length, len(result) + 100000)
             doc = nlp(result)
             masked_chars = list(result)
             # Replace PERSON entities from back to front to maintain index offsets

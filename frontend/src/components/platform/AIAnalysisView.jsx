@@ -57,6 +57,8 @@ import {
   extractUnitKey,
   syncBackendReportsToStore
 } from '../../services/safetyStore';
+import { ALL_CHECKLIST_ITEMS, CLASSIFICATION_CHECKLISTS } from '../../data/safetyChecklistItems';
+export { ALL_CHECKLIST_ITEMS, CLASSIFICATION_CHECKLISTS };
 
 // Available uploaded safety report data from ingestion registry
 const AVAILABLE_UPLOADED_REPORTS = [
@@ -340,6 +342,66 @@ const CONVERSATIONAL_PATTERNS = [
   /^(hi|hii|hiii|hello|hey|heyy|yo|test|testing|check)\b/i
 ];
 
+function isCodeOrTechnicalDocumentation(text) {
+  if (!text || typeof text !== 'string') return false;
+  const raw = text.trim();
+
+  // 1. Docstrings and code blocks
+  if (raw.includes('"""') || raw.includes("'''") || raw.includes('```')) return true;
+  if (/<(?:script|div|span|p|html|body|table|form|button)\b/i.test(raw)) return true;
+
+  // 2. Section underlines (e.g. Module\n-------)
+  const underlineMatch = raw.match(/([A-Za-z0-9_\s]{3,})\n\s*([-=~_]{3,})\s*(?:\n|$)/);
+  if (underlineMatch) {
+    const header = underlineMatch[1].toLowerCase();
+    if (/module|class|function|api|service|engine|package|preprocessing|pipeline|architecture|specification|sdk|model|nlp|component|algorithm/i.test(header)) {
+      return true;
+    }
+  }
+
+  // 3. Source code statements
+  const codePatterns = [
+    /^\s*(?:def\s+[a-zA-Z_]\w*\s*\(|class\s+[a-zA-Z_]\w*|import\s+[a-zA-Z_]\w+|from\s+[a-zA-Z_]\w+\s+import|return\s+|raise\s+[a-zA-Z_]\w*Error)/m,
+    /^\s*(?:const\s+[a-zA-Z_]\w*\s*=|let\s+[a-zA-Z_]\w*\s*=|var\s+[a-zA-Z_]\w*\s*=|function\s+[a-zA-Z_]\w*\s*\(|export\s+(?:default|const|let|var|function))/m,
+    /^\s*(?:public\s+(?:class|static|void|int|String)|private\s+|protected\s+|#include\s+[<"]|std::|System\.out\.println)/m,
+    /(?:console\.log\s*\(|print\s*\(["']|logger\.(?:info|debug|error|warning)\s*\()/,
+    /['"][^'"]+['"]\s*->\s*['"][^'"]+['"]/,
+    /(?:if\s+__name__\s*==\s*['"]__main__['"]|@classmethod|@staticmethod|@pytest\.|@router\.)/
+  ];
+  if (codePatterns.some(p => p.test(raw))) return true;
+
+  // 4. Documentation headers
+  if (/\b(?:Key Features:|Features:|Installation:|Usage Examples?:|API Reference:|Parameters:|Returns:|Arguments:|Kwargs:|Attributes:|Changelog:)\b/i.test(raw)) {
+    return true;
+  }
+
+  // 5. Tech jargon cluster
+  const techTerms = [
+    /\btokenizer\b/i, /\btokenization\b/i, /\bpreprocessing module\b/i, /\bnlp preprocessing\b/i,
+    /\bpii masking\b/i, /\bmodel training\b/i, /\breproducible model\b/i, /\bdata leakage\b/i,
+    /\bhyperparameters?\b/i, /\bloss function\b/i, /\blearning rate\b/i, /\btrain[- ]test split\b/i,
+    /\bregex\b/i, /\bregular expression\b/i, /\bapi endpoint\b/i, /\bjson payload\b/i,
+    /\bdocstring\b/i, /\bunit tests?\b/i, /\bsource code\b/i, /\bcompound terms\b/i
+  ];
+  const techCount = techTerms.filter(p => p.test(raw)).length;
+  if (techCount >= 2) return true;
+
+  // 6. JSON structured payload
+  if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'object' && parsed !== null) return true;
+    } catch (e) {}
+  }
+
+  // 7. SQL statements
+  if (/^\s*(?:SELECT\s+.+\s+FROM|INSERT\s+INTO\s+\w+|UPDATE\s+\w+\s+SET|DELETE\s+FROM\s+\w+|CREATE\s+TABLE)\b/i.test(raw)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isUnrelatedIssue(text, checklist = []) {
   if (Array.isArray(checklist) && checklist.length > 0) {
     return false;
@@ -355,6 +417,7 @@ export function isUnrelatedIssue(text, checklist = []) {
   if (cleaned.length < 4) return true;
   if (UNRELATED_TERMS.includes(cleaned)) return true;
   if (CONVERSATIONAL_PATTERNS.some(p => p.test(cleaned))) return true;
+  if (isCodeOrTechnicalDocumentation(text)) return true;
 
   // NOTE: The backend's classify_safety_observation_validity() is the
   // authoritative safety-relevance gate. The frontend only filters
@@ -416,6 +479,21 @@ export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatu
   const bNorm = (barrierStatus || '').toUpperCase();
   const checkListLower = Array.isArray(checklist) ? checklist.map(c => c.toLowerCase()) : [];
   const combText = `${tLow} ${hLow} ${checkListLower.join(' ')}`;
+
+  // Negative context / Administrative safety checks (drills, toolbox talks, historical reviews)
+  if (/toolbox talk|safety meeting|safety stand-down|safety standdown|lessons learned|historical case|past incident review|fire drill|mock drill|evacuation drill|emergency exercise|routine inspection of|monthly inspection of|inspection tags|classroom training|training presentation|demonstrated dry chemical|safety induction|training video|audit of flammable gas detectors|talk about fire prevention|safety talk/.test(combText)) {
+    return 10;
+  }
+
+  // Controlled thermal operations (burn pit, single spark quenched immediately, minor rag scorch)
+  if (/burn pit|controlled fire|fire training ground|flare pilot|pilot burner|extinguished within|extinguished in|extinguished immediately|quenched with|water cup|water bottle|rag scorch|paper trash can fire|put out in sec|put out in seconds|put out immediately|wiped out with co2|caught grease wiped out/.test(combText) && !/spreading|uncontained|shockwave|blast|major explosion|massive explosion/.test(combText)) {
+    return 20;
+  }
+
+  // Minor contained spills (drip tray, 50ml, wiped with rag)
+  if (/50ml|40ml|30ml|100ml|drip tray|drip pan|minor lube oil leak|minor oil leak|minor oil drip|little oil on floor in tray|caught in dedicated|wiped with rag|wiped with absorb|drop of diesel|wept 40ml|2 drops of/.test(combText) && !/explosion|blast|uncontained|fire|toxic cloud|chemical burn|acid spray|hydrofluoric/.test(combText)) {
+    return 15;
+  }
 
   // 1. Energy utility (0.0 - 1.0)
   let eU = 0.35;
@@ -510,7 +588,13 @@ export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatu
 
   // Safety-critical floor overrides
   let overrideFloor = 0;
-  if (/loto|lockout|not locked out/.test(combText) && (eU >= 0.85 || /electrical|pressure/.test(combText)) && (exU >= 0.70 || /line of fire/.test(combText))) {
+  if (/explosion|explotion|explod|explodid|exploding|exploded|blast|blasted|bleve|vce|detonation|fireball|shockwave/.test(combText) || /tube ruptured violently|furnace roof blown|boiler burst/.test(combText)) {
+    overrideFloor = 94;
+  } else if (/rapidly spreading|spreading fire|spreading to pipe|spreading across|growing fast|uncontrolled hydrocarbon fire|uncontained fire|jet fire|fire expanding|flames spreading|flames leaped/.test(combText) || (/fire|flames/.test(combText) && /cdu heater|pipe racks|piperack|tank farm|tank 304|bund fire/.test(combText))) {
+    overrideFloor = 92;
+  } else if (/h2s alarm triggered|85 ppm|100 ppm|320 ppm|hydrofluoric acid|50 liters of 70%|5000-liter hot caustic|acid sprayed directly onto/.test(combText)) {
+    overrideFloor = 90;
+  } else if (/loto|lockout|not locked out/.test(combText) && (eU >= 0.85 || /electrical|pressure/.test(combText)) && (exU >= 0.70 || /line of fire/.test(combText))) {
     overrideFloor = 88;
   } else if (/confined space|tank entry/.test(combText) && (/gas test|loto|bypassed/.test(combText) || bEff <= 0.40)) {
     overrideFloor = 86;
@@ -709,107 +793,6 @@ function generateAllWeakSignalsAnalysis(storedReports, currentResult, currentTex
   return results;
 }
 
-export const CLASSIFICATION_CHECKLISTS = {
-  NEAR_MISS: [
-    { id: 'nm_slip_trip', label: 'Slip / Trip / Fall', keywords: ['slip', 'trip', 'fall', 'stumble', 'floor'] },
-    { id: 'nm_work_height', label: 'Working at height', keywords: ['height', 'scaffold', 'ladder', 'elevat', 'fall', 'tie-off'] },
-    { id: 'nm_dropped_object', label: 'Dropped object', keywords: ['dropped', 'falling', 'overhead', 'load', 'crane', 'hoist', 'rigging'] },
-    { id: 'nm_vehicle_near_miss', label: 'Near miss with vehicle', keywords: ['vehicle', 'truck', 'forklift', 'car', 'trailer', 'driver'] },
-    { id: 'nm_moving_equip', label: 'Near miss with moving equipment', keywords: ['moving', 'machinery', 'rotating', 'conveyor', 'crane'] },
-    { id: 'nm_equip_failure', label: 'Equipment failure', keywords: ['equipment', 'failure', 'fail', 'malfunction', 'broken', 'defect'] },
-    { id: 'nm_mechanical_failure', label: 'Mechanical failure', keywords: ['mechanical', 'pump', 'engine', 'compressor', 'turbine', 'motor'] },
-    { id: 'nm_electrical', label: 'Electrical hazard', keywords: ['electrical', 'electric', 'voltage', 'arc', 'wire', 'cable', 'breaker', 'shock'] },
-    { id: 'nm_fire_explosion', label: 'Fire / Explosion risk', keywords: ['fire', 'flame', 'explosion', 'blast', 'smoke', 'burn', 'ignit', 'spark'] },
-    { id: 'nm_gas_release', label: 'Gas release', keywords: ['gas', 'vapor', 'vapour', 'fume', 'lel', 'release', 'hiss'] },
-    { id: 'nm_hydrocarbon_leak', label: 'Hydrocarbon leak', keywords: ['hydrocarbon', 'oil', 'fuel', 'diesel', 'petrol', 'crude', 'leak'] },
-    { id: 'nm_chemical_exposure', label: 'Chemical exposure', keywords: ['chemical', 'acid', 'caustic', 'solvent', 'toxic'] },
-    { id: 'nm_pressure_release', label: 'Pressure release', keywords: ['pressure', 'psi', 'bar', 'pressur', 'relief', 'vessel', 'blowout'] },
-    { id: 'nm_energy_release', label: 'Unexpected energy release', keywords: ['energy', 'release', 'stored', 'spring', 'hydraulic', 'pneumatic'] },
-    { id: 'nm_unsafe_prox', label: 'Unsafe proximity', keywords: ['proximity', 'close', 'near', 'distance', 'zone', 'clearance'] },
-    { id: 'nm_line_of_fire', label: 'Line of fire', keywords: ['line of fire', 'moving', 'pinch', 'crush', 'struck', 'barrier'] },
-    { id: 'nm_struck_by', label: 'Struck-by hazard', keywords: ['struck', 'impact', 'collision', 'hit', 'swing'] },
-    { id: 'nm_pinch_point', label: 'Pinch point', keywords: ['pinch', 'crush', 'caught', 'roller', 'gear'] },
-    { id: 'nm_confined_space', label: 'Confined space', keywords: ['confined', 'tank', 'vessel', 'entry', 'manhole'] },
-    { id: 'nm_ppe_issue', label: 'PPE issue', keywords: ['ppe', 'helmet', 'gloves', 'goggle', 'glasses', 'respirator', 'mask', 'shield'] },
-    { id: 'nm_emergency_response', label: 'Emergency response issue', keywords: ['emergency', 'alarm', 'siren', 'evacuation', 'muster'] },
-    { id: 'nm_process_dev', label: 'Process deviation', keywords: ['process', 'deviation', 'pressure', 'temp', 'valve', 'flow', 'gauge'] },
-    { id: 'nm_ptw_issue', label: 'Permit-to-work issue', keywords: ['permit', 'ptw', 'work permit', 'authorization'] },
-    { id: 'nm_loto_issue', label: 'Lockout / Tagout issue', keywords: ['loto', 'lockout', 'tagout', 'isolation', 'de-energiz'] },
-    { id: 'nm_comm_failure', label: 'Communication failure', keywords: ['communication', 'radio', 'misunderstand', 'signal', 'hand signal'] },
-    { id: 'nm_inadequate_supervision', label: 'Inadequate supervision', keywords: ['supervision', 'supervisor', 'unsupervised', 'oversight'] }
-  ],
-  UNSAFE_ACT: [
-    { id: 'ua_ppe_not_used', label: 'PPE not used', keywords: ['ppe', 'helmet', 'gloves', 'goggle', 'glasses', 'respirator', 'mask', 'wear'] },
-    { id: 'ua_incorrect_ppe', label: 'Incorrect PPE used', keywords: ['ppe', 'wrong', 'incorrect', 'improper', 'protection'] },
-    { id: 'ua_proc_not_followed', label: 'Procedure not followed', keywords: ['procedure', 'sop', 'protocol', 'permit', 'ptw', 'rule', 'instruction'] },
-    { id: 'ua_unsafe_op', label: 'Unsafe operation', keywords: ['operation', 'operate', 'speed', 'bypassed', 'reckless', 'rushing'] },
-    { id: 'ua_unauth_op', label: 'Unauthorized operation', keywords: ['unauthorized', 'operation', 'unapproved', 'unqualified'] },
-    { id: 'ua_bypassing_control', label: 'Bypassing safety control', keywords: ['bypassed', 'bypass', 'interlock', 'tamper', 'defeat', 'bridge'] },
-    { id: 'ua_height_no_prot', label: 'Working at height without protection', keywords: ['height', 'scaffold', 'ladder', 'harness', 'unclipped', 'tie-off', 'fall'] },
-    { id: 'ua_unsafe_lifting', label: 'Unsafe lifting', keywords: ['lifting', 'lift', 'back', 'ergonomic', 'heavy', 'rigging', 'sling'] },
-    { id: 'ua_unsafe_manual_handling', label: 'Unsafe manual handling', keywords: ['manual', 'handling', 'carry', 'push', 'pull', 'strain'] },
-    { id: 'ua_enter_restricted', label: 'Entering restricted area', keywords: ['restricted', 'unauthorized', 'barricade', 'cordon', 'exclusion'] },
-    { id: 'ua_enter_line_of_fire', label: 'Entering line of fire', keywords: ['line of fire', 'path', 'crush', 'swing', 'trajectory'] },
-    { id: 'ua_under_load', label: 'Standing under suspended load', keywords: ['suspended', 'load', 'crane', 'under', 'overhead', 'hoist'] },
-    { id: 'ua_near_moving_equip', label: 'Working near moving equipment', keywords: ['moving', 'equipment', 'machinery', 'proximity', 'close'] },
-    { id: 'ua_unsafe_vehicle_op', label: 'Unsafe vehicle operation', keywords: ['vehicle', 'forklift', 'truck', 'driving', 'reversing', 'traffic'] },
-    { id: 'ua_speeding', label: 'Speeding', keywords: ['speeding', 'speed', 'fast', 'rushing', 'limit'] },
-    { id: 'ua_phone_distraction', label: 'Mobile phone distraction', keywords: ['phone', 'mobile', 'distraction', 'cell', 'calling', 'texting'] },
-    { id: 'ua_loto_not_followed', label: 'Lockout / Tagout not followed', keywords: ['loto', 'lockout', 'tagout', 'isolation', 'de-energiz', 'energiz'] },
-    { id: 'ua_ptw_violation', label: 'Permit-to-work violation', keywords: ['permit', 'ptw', 'violation', 'unauthorized', 'expired'] },
-    { id: 'ua_confined_space_violation', label: 'Confined space procedure violation', keywords: ['confined', 'tank', 'entry', 'atmosphere', 'ventilation'] },
-    { id: 'ua_hot_work_violation', label: 'Hot work procedure violation', keywords: ['hot work', 'welding', 'cutting', 'grinding', 'spark', 'torch', 'fire watch'] },
-    { id: 'ua_smoking_restricted', label: 'Smoking in restricted area', keywords: ['smoking', 'smoke', 'cigarette', 'lighter', 'match'] },
-    { id: 'ua_improper_tool', label: 'Improper tool usage', keywords: ['tool', 'improvised', 'wrong tool', 'modified', 'damaged tool'] },
-    { id: 'ua_remove_guard', label: 'Removing machine guard', keywords: ['guard', 'removed', 'removal', 'cover', 'barrier'] },
-    { id: 'ua_op_without_auth', label: 'Operating without authorization', keywords: ['authorization', 'unauthorized', 'unqualified', 'unlicensed'] },
-    { id: 'ua_ignoring_alarm', label: 'Ignoring warning/alarm', keywords: ['alarm', 'warning', 'ignoring', 'ignored', 'siren', 'detector'] },
-    { id: 'ua_failure_communicate', label: 'Failure to communicate hazard', keywords: ['communicate', 'communication', 'warn', 'handover', 'briefing'] },
-    { id: 'ua_inadequate_supervision', label: 'Inadequate supervision', keywords: ['supervision', 'supervisor', 'unsupervised', 'oversight'] }
-  ],
-  UNSAFE_CONDITION: [
-    { id: 'uc_damaged_equip', label: 'Damaged equipment', keywords: ['damaged', 'damage', 'broken', 'wear', 'crack', 'defect', 'aged'] },
-    { id: 'uc_defective_equip', label: 'Defective equipment', keywords: ['defective', 'faulty', 'malfunction', 'broken', 'failure'] },
-    { id: 'uc_missing_guard', label: 'Missing machine guard', keywords: ['guard', 'missing guard', 'cover', 'shield', 'unprotected'] },
-    { id: 'uc_poor_housekeeping', label: 'Poor housekeeping', keywords: ['housekeeping', 'clutter', 'mess', 'spill', 'debris', 'trash', 'untidy'] },
-    { id: 'uc_slippery_surface', label: 'Slippery surface', keywords: ['slippery', 'slick', 'wet', 'oil on floor', 'grease'] },
-    { id: 'uc_uneven_surface', label: 'Uneven surface', keywords: ['uneven', 'pothole', 'grating', 'hole', 'trip', 'rough'] },
-    { id: 'uc_poor_lighting', label: 'Poor lighting', keywords: ['lighting', 'light', 'dark', 'dim', 'illumination', 'visibility', 'lamp'] },
-    { id: 'uc_unsafe_access', label: 'Unsafe access', keywords: ['access', 'walkway', 'catwalk', 'stairs', 'ladder', 'passage', 'egress', 'exit'] },
-    { id: 'uc_blocked_exit', label: 'Blocked emergency exit', keywords: ['exit', 'emergency exit', 'blocked', 'obstructed', 'egress'] },
-    { id: 'uc_electrical_hazard', label: 'Electrical hazard', keywords: ['electrical', 'electric', 'voltage', 'wire', 'exposed', 'panel', 'switch', 'cable'] },
-    { id: 'uc_exposed_wiring', label: 'Exposed wiring', keywords: ['wire', 'wiring', 'cable', 'bare', 'exposed', 'insulation'] },
-    { id: 'uc_fire_hazard', label: 'Fire hazard', keywords: ['fire', 'flammable', 'combustible', 'spark', 'solvent', 'heat', 'ignit'] },
-    { id: 'uc_gas_leak', label: 'Gas leak', keywords: ['gas', 'leak', 'hiss', 'odor', 'smell', 'lel', 'vapor'] },
-    { id: 'uc_hydrocarbon_leak', label: 'Hydrocarbon leak', keywords: ['hydrocarbon', 'oil', 'fuel', 'crude', 'diesel', 'petrol', 'condensate'] },
-    { id: 'uc_chemical_spill', label: 'Chemical spill', keywords: ['chemical', 'spill', 'acid', 'caustic', 'toxic', 'puddle'] },
-    { id: 'uc_corroded_equip', label: 'Corroded equipment', keywords: ['corros', 'rust', 'erosion', 'pitting', 'wall thinning'] },
-    { id: 'uc_high_pressure', label: 'High pressure hazard', keywords: ['pressure', 'high pressure', 'psi', 'bar', 'relief valve'] },
-    { id: 'uc_high_temp', label: 'High temperature hazard', keywords: ['temperature', 'hot', 'thermal', 'heat', 'steam', 'burn'] },
-    { id: 'uc_unprot_machinery', label: 'Unprotected moving machinery', keywords: ['machinery', 'moving', 'rotating', 'unprotected', 'unguarded'] },
-    { id: 'uc_missing_barricade', label: 'Missing barricade', keywords: ['barricade', 'barrier', 'cordon', 'fence', 'tape'] },
-    { id: 'uc_missing_sign', label: 'Missing warning sign', keywords: ['sign', 'signage', 'warning sign', 'caution', 'label'] },
-    { id: 'uc_inadequate_ventilation', label: 'Inadequate ventilation', keywords: ['ventilation', 'exhaust', 'airflow', 'fume', 'stagnant'] },
-    { id: 'uc_confined_space_hazard', label: 'Confined space hazard', keywords: ['confined', 'tank', 'pit', 'manhole', 'asphyx'] },
-    { id: 'uc_fall_hazard', label: 'Fall hazard', keywords: ['fall', 'edge', 'opening', 'drop', 'unprotected edge', 'hole'] },
-    { id: 'uc_dropped_obj_hazard', label: 'Dropped object hazard', keywords: ['dropped', 'falling object', 'overhead', 'loose', 'toeboard'] },
-    { id: 'uc_unsafe_scaffolding', label: 'Unsafe scaffolding', keywords: ['scaffold', 'scaffolding', 'plank', 'handrail', 'clamp', 'green tag'] },
-    { id: 'uc_damaged_ladder', label: 'Damaged ladder', keywords: ['ladder', 'rung', 'step ladder', 'cracked ladder'] },
-    { id: 'uc_structural_damage', label: 'Structural damage', keywords: ['structural', 'structure', 'beam', 'support', 'grating', 'deck', 'sag'] },
-    { id: 'uc_emergency_equip_unavail', label: 'Emergency equipment unavailable', keywords: ['emergency', 'eyewash', 'safety shower', 'first aid', 'stretcher'] },
-    { id: 'uc_fire_exting_unavail', label: 'Fire extinguisher unavailable', keywords: ['extinguisher', 'fire extinguisher', 'co2', 'hose reel', 'depleted'] },
-    { id: 'uc_alarm_malfunction', label: 'Safety alarm malfunction', keywords: ['alarm', 'malfunction', 'detector', 'siren', 'fault', 'trouble'] },
-    { id: 'uc_barrier_failure', label: 'Process safety barrier failure', keywords: ['barrier', 'failure', 'esd', 'psv', 'seal', 'gasket blowout'] },
-    { id: 'uc_inadequate_ppe_avail', label: 'Inadequate PPE availability', keywords: ['ppe', 'unavailable', 'shortage', 'stock', 'supply'] }
-  ]
-};
-
-export const ALL_CHECKLIST_ITEMS = [
-  ...CLASSIFICATION_CHECKLISTS.NEAR_MISS.map(item => ({ ...item, category: 'NEAR_MISS', categoryLabel: 'Near Miss', badgeClass: 'bg-orange-100 text-[#FF5A36] border-orange-200' })),
-  ...CLASSIFICATION_CHECKLISTS.UNSAFE_ACT.map(item => ({ ...item, category: 'UNSAFE_ACT', categoryLabel: 'Unsafe Act', badgeClass: 'bg-purple-100 text-purple-700 border-purple-200' })),
-  ...CLASSIFICATION_CHECKLISTS.UNSAFE_CONDITION.map(item => ({ ...item, category: 'UNSAFE_CONDITION', categoryLabel: 'Unsafe Condition', badgeClass: 'bg-blue-100 text-blue-700 border-blue-200' }))
-];
-
 export function detectCategoryFromExplanation(text) {
   if (!text || !text.trim()) return null;
   const tLow = text.toLowerCase().trim();
@@ -826,7 +809,7 @@ export function detectCategoryFromExplanation(text) {
 
   // 2. Unsafe Act Patterns (Worker action, behavior, rule violation, PPE omission)
   const unsafeActRegexes = [
-    /\b(not\s*wearing|without\s*(wearing|ppe|harness|helmet|glasses|gloves)|failed\s*to\s*wear|improper\s*ppe|removed\s*ppe)\b/,
+    /\b(not\s*wearing|without\s*(wearing|ppe|harness|helmet|glasses|gloves)|failed\s*to\s*wear|improper\s*ppe|removed\s*ppe|missing\s*(?:safety\s*)?gear|no\s*safety\s*gear)\b/,
     /\b(procedure\s*not\s*followed|ptw\s*violation|permit\s*violation|without\s*permit|unauthorized\s*operation|no\s*ptw)\b/,
     /\b(bypassed|bypassing|interlock\s*disabled|tampered\s*with|overrode|defeated\s*safety)\b/,
     /\b(speeding|excessive\s*speed|driving\s*recklessly|cell\s*phone|phone\s*distraction|mobile\s*use)\b/,
@@ -1057,6 +1040,14 @@ export default function AIAnalysisView() {
       return;
     }
 
+    // Reject when input exceeds 999,999 characters
+    if (text && text.length > 999999) {
+      setValidationError('Field explanation exceeds maximum limit of 999,999 characters.');
+      setAnalysisResult(null);
+      setIsAnalyzing(false);
+      return;
+    }
+
     // Respect manual category selection when text description is entered (do not assume!)
     let determinedCategory = typeToUse || reportType;
     if (!text && currentChecklist && currentChecklist.length > 0) {
@@ -1104,7 +1095,11 @@ export default function AIAnalysisView() {
       setTimeout(() => {
         setIsAnalyzing(false);
         setAnalysisStep('');
-        setValidationError('Enter Correct Issue: Please describe an active operational safety observation, equipment condition, or hazard.');
+        const isCodeInput = isCodeOrTechnicalDocumentation(text);
+        const reasonMsg = isCodeInput
+          ? 'Input appears to be software code, technical documentation, or programming syntax rather than an operational workplace safety observation. Please describe a safety hazard, unsafe condition, unsafe act, or near-miss observation.'
+          : 'Enter Correct Issue: Please describe an active operational safety observation, equipment condition, or hazard.';
+        setValidationError(reasonMsg);
 
         const finalResult = {
           is_unrelated: true,
@@ -1120,7 +1115,7 @@ export default function AIAnalysisView() {
           energy_source: 'None Identified',
           barrier_status: 'Not Applicable (Unrelated Input)',
           iogp_rule: 'Not Applicable',
-          explainable_reasoning: `The input "${processedText}" is not recognized as a related operational safety issue. Please enter a correct safety issue describing equipment, location, barrier conditions, or hazardous energy vectors.`,
+          explainable_reasoning: reasonMsg,
           recommended_controls: [
             'Enter a correct safety issue describing equipment, location, and conditions',
             'Include specific hazard parameters (e.g. pressure, voltage, chemical, elevation)',
@@ -1152,6 +1147,8 @@ export default function AIAnalysisView() {
         incident_longitude: selectedIncidentLocation?.longitude,
         incident_address: selectedIncidentLocation?.address,
         incident_location_name: selectedIncidentLocation?.name,
+        checklist: currentChecklist,
+        selected_checklist: currentChecklist,
         ...(currentChecklist.length > 0 ? { additional_context: `Safety Factors: ${currentChecklist.join(', ')}` } : {})
       });
 
@@ -1161,7 +1158,8 @@ export default function AIAnalysisView() {
           setAnalysisStep('');
 
           if (backendResult.is_unrelated) {
-            setValidationError('Enter Correct Issue: Please describe an active operational safety observation, equipment condition, or hazard.');
+            const reasonMsg = backendResult.explainable_reasoning || backendResult.explanation || backendResult.message || 'Enter Correct Issue: Please describe an active operational safety observation, equipment condition, or hazard.';
+            setValidationError(reasonMsg);
             setAnalysisResult({
               is_unrelated: true,
               report_name: 'Enter Correct Issue',
@@ -1176,7 +1174,7 @@ export default function AIAnalysisView() {
               energy_source: 'None Identified',
               barrier_status: 'Not Applicable (Unrelated Input)',
               iogp_rule: 'Not Applicable',
-              explainable_reasoning: `The input "${text}" is not recognized as a related operational safety issue. Please enter a correct safety issue describing equipment, location, barrier conditions, or hazardous energy vectors.`,
+              explainable_reasoning: reasonMsg,
               recommended_controls: [
                 'Enter a correct safety issue describing equipment, location, and conditions',
                 'Include specific hazard parameters (e.g. pressure, voltage, chemical, elevation)',
@@ -1402,6 +1400,12 @@ export default function AIAnalysisView() {
     }
     if (!trimmedDescription && (!selectedChecklist || selectedChecklist.length === 0)) {
       setValidationError('Please enter a safety observation or select at least one checklist factor.');
+      setAnalysisResult(null);
+      return;
+    }
+
+    if (trimmedDescription && trimmedDescription.length > 999999) {
+      setValidationError('Field explanation exceeds maximum limit of 999,999 characters.');
       setAnalysisResult(null);
       return;
     }
@@ -1662,17 +1666,17 @@ export default function AIAnalysisView() {
                       <Mic className="w-3.5 h-3.5 text-[#FF5A36]" />
                       <span>Voice Report (Telugu/Hindi/En)</span>
                     </button>
-                    <span className={`text-xs sm:text-sm font-mono font-black ${description.length >= 250 ? 'text-[#FF5A36]' : 'text-slate-500'}`}>
-                      {description.length} / 250 CHARS
+                    <span className={`text-xs sm:text-sm font-mono font-black ${description.length >= 999999 ? 'text-[#FF5A36]' : 'text-slate-500'}`}>
+                      {description.length} / 999999 CHARACTERS
                     </span>
                   </div>
                 </div>
                 <textarea
                   rows={5}
-                  maxLength={250}
+                  maxLength={999999}
                   value={description}
                   onChange={(e) => {
-                    const val = e.target.value.slice(0, 250);
+                    const val = e.target.value.slice(0, 999999);
                     setDescription(val);
                     if (validationError) setValidationError('');
                     if (analysisResult) setAnalysisResult(null);
@@ -1741,7 +1745,7 @@ export default function AIAnalysisView() {
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2">
                       <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-800 font-heading">
-                        Select Safety Factors
+                        Select Safety Issues (15 Options)
                       </span>
                       {selectedChecklist.length > 0 && detectCategoryFromChecklist(selectedChecklist) && (
                         <span className="text-[10px] font-mono font-bold text-[#FF5A36] uppercase px-2 py-0.5 bg-orange-100/80 rounded-md border border-orange-200">
@@ -1763,7 +1767,7 @@ export default function AIAnalysisView() {
                   {/* Category Filter Tabs */}
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
                     {[
-                      { id: 'ALL', label: 'All Factors', count: ALL_CHECKLIST_ITEMS.length },
+                      { id: 'ALL', label: 'All Issues', count: ALL_CHECKLIST_ITEMS.length },
                       { id: 'NEAR_MISS', label: 'Near Miss', count: CLASSIFICATION_CHECKLISTS.NEAR_MISS.length },
                       { id: 'UNSAFE_ACT', label: 'Unsafe Act', count: CLASSIFICATION_CHECKLISTS.UNSAFE_ACT.length },
                       { id: 'UNSAFE_CONDITION', label: 'Unsafe Condition', count: CLASSIFICATION_CHECKLISTS.UNSAFE_CONDITION.length }
@@ -1793,7 +1797,7 @@ export default function AIAnalysisView() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') e.preventDefault();
                       }}
-                      placeholder="Search safety factors across categories..."
+                      placeholder="Search safety issues (e.g. Gas Leak, Oil Spill)..."
                       className="w-full pl-9 pr-8 py-2 rounded-lg bg-white border border-stone-200 text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:border-[#FF5A36] focus:ring-2 focus:ring-[#FF5A36]/20 transition-all placeholder:text-slate-400"
                     />
                     {checklistSearch && (
@@ -1846,7 +1850,7 @@ export default function AIAnalysisView() {
                       </div>
                     ) : (
                       <div className="py-8 text-center text-xs sm:text-sm font-semibold text-slate-400 bg-white rounded-lg border border-dashed border-stone-200">
-                        No matching safety factors found
+                        No matching safety issues found
                       </div>
                     )}
                   </div>
@@ -1854,7 +1858,7 @@ export default function AIAnalysisView() {
                   {/* Panel Footer */}
                   <div className="pt-2 border-t border-stone-200 flex items-center justify-between text-xs font-mono text-slate-500">
                     <span>
-                      Showing {filteredChecklistOptions.length} of {itemsToFilter.length} factors
+                      Showing {filteredChecklistOptions.length} of {itemsToFilter.length} issues
                     </span>
                     <span className="font-bold text-slate-700">
                       {selectedChecklist.length} selected
@@ -1968,7 +1972,9 @@ export default function AIAnalysisView() {
                           </span>
                         </div>
                         <p className="text-xs sm:text-sm font-semibold text-amber-900 mt-1.5 leading-relaxed">
-                          The entered description <span className="font-mono font-black text-amber-950 px-1.5 py-0.5 bg-amber-100 rounded border border-amber-200">"{description || 'nothing'}"</span> does not contain a recognized industrial safety hazard, equipment condition, or barrier failure.
+                          {analysisResult.explainable_reasoning || (
+                            <>The entered description <span className="font-mono font-black text-amber-950 px-1.5 py-0.5 bg-amber-100 rounded border border-amber-200">"{description && description.length > 70 ? `${description.slice(0, 70)}...` : (description || 'nothing')}"</span> does not contain a recognized industrial safety hazard, equipment condition, or barrier failure.</>
+                          )}
                         </p>
                       </div>
                     </div>

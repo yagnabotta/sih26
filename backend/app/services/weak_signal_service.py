@@ -1,14 +1,17 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
-from ..models.weak_signal import WeakSignal, WeakSignalReview
+from ..models.weak_signal import WeakSignal, WeakSignalReview, report_weak_signals
 from ..ai_services.signal_correlation import (
     evaluate_report_pair_or_group
 )
 
 def evaluate_custom_reports_correlation(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Directly evaluates whether a set of reports interact to form a compound weak signal / precursor."""
-    return evaluate_report_pair_or_group(reports)
+    res = evaluate_report_pair_or_group(reports)
+    if "is_correlated" not in res:
+        res["is_correlated"] = res.get("cluster_detected", False)
+    return res
 
 def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any]:
     """
@@ -38,15 +41,25 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             "id": ws.id,
             "signal_id": ws.signal_id,
             "title": ws.title,
+            "pattern_name": ws.title,
             "category": ws.category,
             "cluster_detected": True,
-            "relationship": f"Recurring {ws.category} ({ws.location or ws.unit})",
+            "relationship": ws.title,
+            "incident_types": list(dict.fromkeys(r["report_type"] for r in source_reps)) if source_reps else [ws.category],
+            "locations": [ws.location or ws.unit] if (ws.location or ws.unit) else [],
+            "timestamps": [str(r["date_submitted"]) for r in source_reps if r.get("date_submitted")],
+            "shared_hazard_or_pathway": ws.escalation_path or ws.detected_hazard,
+            "evidence_summary": ws.detection_reason,
+            "confidence_level": "CONFIRMED" if ws.recurrence_count >= 2 else "PLAUSIBLE",
+            "missing_information": [],
             "potential_consequence": ws.escalation_path,
             "combined_risk": ws.risk_level.upper(),
+            "risk_classification": ws.risk_level,
             "correlation_score": ws.risk_score,
             "risk_score": ws.risk_score,
             "risk_level": ws.risk_level,
             "reason": ws.detection_reason,
+            "recommended_preventive_actions": ws.recommended_action,
             "recommended_action": ws.recommended_action,
             "first_detected_date": ws.first_detected_at.strftime("%Y-%m-%d") if ws.first_detected_at else str(date.today()),
             "source": "Automated Multi-Record Surveillance",
@@ -189,15 +202,26 @@ def get_weak_signals_for_organization(db: Session, org_id: str) -> Dict[str, Any
             "cluster_id": f"CL-{idx:02d}",
             "cluster_title": f"EMERGING {combined_risk}-RISK CLUSTER: {rel}",
             "title": rel,
+            "pattern_name": sig.get("pattern_name", rel),
             "relationship": rel,
             "signals": signals_list,
+            "contributing_reports": source_reps,
+            "incident_types": sig.get("incident_types", [s.get("individual_risk") for s in signals_list]),
+            "locations": sig.get("locations", [cluster_loc]),
+            "timestamps": sig.get("timestamps", [s.get("date") for s in signals_list if s.get("date")]),
+            "shared_hazard_or_pathway": sig.get("shared_hazard_or_pathway", consequence),
+            "evidence_summary": sig.get("evidence_summary", reason),
+            "confidence_level": sig.get("confidence_level", "CONFIRMED"),
+            "missing_information": sig.get("missing_information", []),
             "individual_risk_levels": risk_levels_summary,
             "location": cluster_loc,
             "time_relationship": time_rel,
             "correlation_score": score,
             "potential_consequence": consequence,
             "combined_risk": combined_risk,
+            "risk_classification": sig.get("risk_classification", combined_risk.title()),
             "reason": reason,
+            "recommended_preventive_actions": sig.get("recommended_preventive_actions", action),
             "recommended_action": action,
             "progression_steps": progression,
             "source_signal_id": sig.get("signal_id", f"WS-{idx:02d}"),
@@ -302,3 +326,269 @@ def update_weak_signal_review(
         "reviewer_notes": review.reviewer_notes,
         "weak_signal": signal
     }
+
+
+def clear_all_weak_signals_for_org(db: Session, org_id: str) -> Dict[str, Any]:
+    """Clears all weak signals and associations for an organization to ensure a clean slate."""
+    # 1. Delete from association table for this org's signals
+    org_signal_ids = [s.id for s in db.query(WeakSignal.id).filter(WeakSignal.organization_id == org_id).all()]
+    if org_signal_ids:
+        db.execute(report_weak_signals.delete().where(report_weak_signals.c.weak_signal_id.in_(org_signal_ids)))
+    
+    # 2. Delete reviews and signals
+    db.query(WeakSignalReview).filter(WeakSignalReview.organization_id == org_id).delete(synchronize_session=False)
+    db.query(WeakSignal).filter(WeakSignal.organization_id == org_id).delete(synchronize_session=False)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "All weak signals and multi-hazard clusters successfully cleared. Awaiting user-submitted descriptions.",
+        "active_signals_count": 0,
+        "emerging_clusters_count": 0
+    }
+
+
+def analyze_user_description_and_correlate(
+    db: Session,
+    current_user: Any,
+    description: str,
+    location: str = "Unit 1",
+    report_type: str = "NEAR_MISS"
+) -> Dict[str, Any]:
+    """
+    Takes an actual user-entered incident description, validates it,
+    creates a persisted safety report, and runs real-time weak signal correlation
+    against previously submitted legitimate reports.
+    """
+    from ..models.safety_report import SafetyReport
+    from ..models.ai_analysis import AIAnalysis
+    from ..services.report_service import generate_report_reference
+    from ..ai_services.ai_service import analyze_safety_report
+    from ..ai_services.safety_validity import classify_safety_observation_validity
+    from .historical_pattern_service import detect_and_update_weak_signals
+
+    clean_desc = (description or "").strip()
+    clean_loc = (location or "Unit 1").strip()
+    clean_type = (report_type or "NEAR_MISS").upper().replace(" ", "_")
+
+    # Step 1: Safety Validity Check
+    validity = classify_safety_observation_validity(clean_desc)
+    if validity.get("is_unrelated"):
+        return {
+            "success": False,
+            "is_unrelated": True,
+            "message": validity.get("explanation", "Input does not contain a recognized safety observation."),
+            "weak_signal_detected": False,
+            "emerging_clusters": get_weak_signals_for_organization(db, current_user.organization_id).get("emerging_clusters", [])
+        }
+
+    # Step 2: Generate Reference & Persist Report
+    org_id = current_user.organization_id
+    ref = generate_report_reference(db, org_id)
+    report = SafetyReport(
+        report_reference=ref,
+        organization_id=org_id,
+        user_id=current_user.id if hasattr(current_user, "id") else None,
+        report_type=clean_type,
+        description=clean_desc,
+        original_description=clean_desc,
+        normalized_description=clean_desc,
+        location=clean_loc,
+        report_date=str(date.today()),
+        analysis_status="COMPLETED"
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+
+    # Step 3: Run AI NLP Analysis
+    raw_result = analyze_safety_report(
+        report_type=clean_type,
+        description=clean_desc,
+        additional_context=f"Location: {clean_loc}"
+    )
+
+    ai_analysis = AIAnalysis(
+        report_id=report.id,
+        organization_id=org_id,
+        analysis_context=raw_result.get("analysis_context", "Interactive Field Analysis"),
+        identified_action=raw_result.get("identified_action"),
+        identified_condition=raw_result.get("identified_condition"),
+        identified_event=raw_result.get("identified_event"),
+        identified_hazard=raw_result.get("identified_hazard"),
+        safety_signals=raw_result.get("safety_signals", []),
+        energy_source=raw_result.get("energy_source"),
+        exposure=raw_result.get("exposure"),
+        barrier_information=raw_result.get("barrier_information"),
+        potential_consequence=raw_result.get("potential_consequence"),
+        sif_precursor_assessment=raw_result.get("sif_precursor_assessment", "NO"),
+        explanation=raw_result.get("explanation", "")
+    )
+    db.add(ai_analysis)
+    db.commit()
+
+    # Step 4: Run Real-Time Historical & Multi-Signal Correlation
+    ws_res = detect_and_update_weak_signals(
+        db=db,
+        org_id=org_id,
+        current_report=report,
+        raw_nlp_result=raw_result
+    )
+
+    # Step 5: Fetch fresh weak signals state
+    fresh_state = get_weak_signals_for_organization(db, org_id)
+
+    return {
+        "success": True,
+        "report_reference": ref,
+        "report_id": report.id,
+        "location": clean_loc,
+        "hazard": raw_result.get("identified_hazard"),
+        "risk_score": raw_result.get("ai_sif_score", 30),
+        "determination_status": raw_result.get("final_ai_decision", "NON-SIF OBSERVATION"),
+        "weak_signal_detected": ws_res.get("weak_signal_detected", False),
+        "weak_signal_title": ws_res.get("weak_signal_title"),
+        "weak_signal_reason": ws_res.get("weak_signal_reason"),
+        "escalation_path": ws_res.get("escalation_path"),
+        "summary": fresh_state.get("summary"),
+        "weak_signals": fresh_state.get("weak_signals", []),
+        "emerging_clusters": fresh_state.get("emerging_clusters", [])
+    }
+
+
+def correlate_two_user_descriptions(
+    db: Session,
+    current_user: Any,
+    description_1: str,
+    location_1: str,
+    description_2: str,
+    location_2: str
+) -> Dict[str, Any]:
+    """
+    Takes two user-entered incident descriptions, evaluates their cross-hazard
+    physical, spatial, and escalation interaction, saves both as legitimate reports,
+    and if correlated, creates an Emerging Multi-Signal Hazard Cluster.
+    """
+    from ..models.safety_report import SafetyReport
+    from ..models.ai_analysis import AIAnalysis
+    from ..services.report_service import generate_report_reference
+    from ..ai_services.ai_service import analyze_safety_report
+    from ..ai_services.signal_correlation import evaluate_report_pair_or_group
+
+    org_id = current_user.organization_id
+    today_str = str(date.today())
+
+    # Create Report 1
+    ref1 = generate_report_reference(db, org_id)
+    rep1 = SafetyReport(
+        report_reference=ref1,
+        organization_id=org_id,
+        user_id=current_user.id if hasattr(current_user, "id") else None,
+        report_type="NEAR_MISS",
+        description=description_1.strip(),
+        original_description=description_1.strip(),
+        normalized_description=description_1.strip(),
+        location=location_1.strip(),
+        report_date=today_str,
+        analysis_status="COMPLETED"
+    )
+    db.add(rep1)
+    db.commit()
+    db.refresh(rep1)
+
+    # Create Report 2
+    ref2 = generate_report_reference(db, org_id)
+    rep2 = SafetyReport(
+        report_reference=ref2,
+        organization_id=org_id,
+        user_id=current_user.id if hasattr(current_user, "id") else None,
+        report_type="UNSAFE_CONDITION",
+        description=description_2.strip(),
+        original_description=description_2.strip(),
+        normalized_description=description_2.strip(),
+        location=location_2.strip(),
+        report_date=today_str,
+        analysis_status="COMPLETED"
+    )
+    db.add(rep2)
+    db.commit()
+    db.refresh(rep2)
+
+    # Analyze both reports
+    raw_res1 = analyze_safety_report("NEAR_MISS", description_1.strip(), additional_context=f"Location: {location_1}")
+    raw_res2 = analyze_safety_report("UNSAFE_CONDITION", description_2.strip(), additional_context=f"Location: {location_2}")
+
+    # Evaluate correlation using rule-based engine
+    eval_input = [
+        {
+            "report_id": ref1,
+            "description": description_1.strip(),
+            "location": location_1.strip(),
+            "timestamp": f"{today_str}T08:00:00Z",
+            "report_type": "Near Miss",
+            "observed_severity": "Moderate"
+        },
+        {
+            "report_id": ref2,
+            "description": description_2.strip(),
+            "location": location_2.strip(),
+            "timestamp": f"{today_str}T10:30:00Z",
+            "report_type": "Unsafe Condition",
+            "observed_severity": "Moderate"
+        }
+    ]
+    corr_result = evaluate_report_pair_or_group(eval_input)
+
+    # If cluster detected, create WeakSignal in DB
+    if corr_result.get("cluster_detected", False):
+        signal_count = db.query(WeakSignal).filter(WeakSignal.organization_id == org_id).count()
+        sig_id = f"WS-{signal_count + 1:03d}"
+        
+        ws_obj = WeakSignal(
+            signal_id=sig_id,
+            organization_id=org_id,
+            signal_type="COMPOUND_HAZARD_CLUSTER",
+            title=corr_result.get("pattern_name") or corr_result.get("relationship") or "Correlated Multi-Hazard Cluster",
+            category=corr_result.get("relationship") or "Multi-Signal Interaction",
+            description=corr_result.get("reason") or "Interacting safety observations indicate potential escalation.",
+            detected_hazard=corr_result.get("relationship"),
+            location=location_1.strip(),
+            unit=location_1.strip(),
+            activity="Operational Activity",
+            energy_vector=raw_res1.get("energy_source") or raw_res2.get("energy_source"),
+            barrier_issue=raw_res1.get("barrier_information") or raw_res2.get("barrier_information"),
+            recurrence_count=2,
+            risk_score=corr_result.get("correlation_score", 85),
+            risk_level=corr_result.get("risk_classification", "High"),
+            first_detected_at=datetime.utcnow(),
+            last_detected_at=datetime.utcnow(),
+            current_report_id=rep2.id,
+            related_report_ids=[rep1.id, rep2.id],
+            detection_reason=corr_result.get("reason") or "Rule-based physics & spatial correlation identified interacting hazards.",
+            escalation_path=corr_result.get("potential_consequence") or "Potential escalated SIF event.",
+            recommended_action=corr_result.get("recommended_preventive_actions") or "Inspect and isolate affected operational zone.",
+            status="Under Review"
+        )
+        db.add(ws_obj)
+        db.commit()
+        db.refresh(ws_obj)
+
+        # Associate both reports
+        ws_obj.safety_reports.append(rep1)
+        ws_obj.safety_reports.append(rep2)
+        db.commit()
+
+    fresh_state = get_weak_signals_for_organization(db, org_id)
+
+    return {
+        "success": True,
+        "correlation_result": corr_result,
+        "is_correlated": corr_result.get("cluster_detected", False),
+        "cluster_detected": corr_result.get("cluster_detected", False),
+        "report_1_ref": ref1,
+        "report_2_ref": ref2,
+        "summary": fresh_state.get("summary"),
+        "weak_signals": fresh_state.get("weak_signals", []),
+        "emerging_clusters": fresh_state.get("emerging_clusters", [])
+    }
+

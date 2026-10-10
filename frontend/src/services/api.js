@@ -482,6 +482,41 @@ export const api = {
     return res.json();
   },
 
+  analyzeDescriptionForWeakSignal: async (payload) => {
+    const res = await fetch(`${API_BASE}/weak-signals/analyze-description`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to analyze observation' }));
+      throw new Error(err.detail || 'Failed to analyze observation');
+    }
+    return res.json();
+  },
+
+  correlateDescriptions: async (payload) => {
+    const res = await fetch(`${API_BASE}/weak-signals/correlate-descriptions`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to correlate observations' }));
+      throw new Error(err.detail || 'Failed to correlate observations');
+    }
+    return res.json();
+  },
+
+  resetWeakSignals: async () => {
+    const res = await fetch(`${API_BASE}/weak-signals/reset`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to reset weak signals');
+    return res.json();
+  },
+
   triggerSignalCorrelation: async () => {
     const res = await fetch(`${API_BASE}/weak-signals/correlate`, {
       method: 'POST',

@@ -9,8 +9,34 @@ Strictly avoids hallucinating hazards without evidence.
 import re
 from typing import Optional, List, Dict
 
-# Severity weights for multi-hazard prioritization (0 - 30 scale)
+try:
+    from .safety_context import (
+        is_negative_context,
+        is_controlled_thermal_context,
+        is_minor_contained_spill,
+        is_catastrophic_explosion,
+        is_spreading_process_fire
+    )
+except (ImportError, ValueError):
+    try:
+        from safety_context import (
+            is_negative_context,
+            is_controlled_thermal_context,
+            is_minor_contained_spill,
+            is_catastrophic_explosion,
+            is_spreading_process_fire
+        )
+    except ImportError:
+        def is_negative_context(t): return False
+        def is_controlled_thermal_context(t): return False
+        def is_minor_contained_spill(t): return False
+        def is_catastrophic_explosion(t): return False
+        def is_spreading_process_fire(t): return False
+
+# Severity weights for multi-hazard prioritization (0 - 35 scale)
 HAZARD_SEVERITY_WEIGHTS: Dict[str, int] = {
+    "Catastrophic Explosion & Blast Hazard": 35,
+    "Spreading Hydrocarbon Process Fire": 33,
     "Lockout / Tagout (LOTO) Non-Compliance": 30,
     "Atmospheric & Confined Space Hazard": 30,
     "High-Pressure Line & Stored Energy Hazard": 28,
@@ -32,9 +58,12 @@ HAZARD_SEVERITY_WEIGHTS: Dict[str, int] = {
     "Electrical & Trip Hazard": 16,
     "Emergency Access & Egress Obstruction": 12,
     "Unsafe Machinery Operation & Equipment Control": 20,
+    "Controlled Thermal Operation / Minor Extinguished Fire": 8,
+    "Minor Contained Chemical / Oil Seepage": 6,
     "Slip / Trip / Fall Hazard": 8,
     "Housekeeping / Trip Hazard": 8,
-    "Lighting & Visibility Defect": 6
+    "Lighting & Visibility Defect": 6,
+    "Safety Training / Drill / Non-Hazardous Context": 4
 }
 
 
@@ -48,6 +77,20 @@ def detect_all_hazards(text: str) -> List[str]:
 
     lower_text = text.lower()
     detected = []
+
+    # 0. Negative Context Filtering (Drills, Toolbox Talks, Routine Checks)
+    if is_negative_context(lower_text):
+        return ["Safety Training / Drill / Non-Hazardous Context"]
+
+    # Critical Refinery Event Detections
+    if is_catastrophic_explosion(lower_text):
+        detected.append("Catastrophic Explosion & Blast Hazard")
+    if is_spreading_process_fire(lower_text):
+        detected.append("Spreading Hydrocarbon Process Fire")
+    if is_controlled_thermal_context(lower_text):
+        detected.append("Controlled Thermal Operation / Minor Extinguished Fire")
+    if is_minor_contained_spill(lower_text):
+        detected.append("Minor Contained Chemical / Oil Seepage")
 
     # 1. Lockout / Tagout (LOTO) Non-Compliance (Critical SIF Precursor)
     if re.search(r'\b(loto|lockout|tagout|lock-out|tag-out|de-energiz|without isolation|not locked out|ignored loto|bypassed loto|failed to follow loto|loto not followed|zero energy|energy isolation)\b', lower_text):
@@ -87,14 +130,16 @@ def detect_all_hazards(text: str) -> List[str]:
         if "Atmospheric & Confined Space Hazard" not in detected:
             detected.append("Gas Leakage & Flammable Atmosphere")
 
-    # 9. Fire & Thermal / Explosion Hazard (exclude 'line of fire')
+    # 9. Fire & Thermal / Explosion Hazard (exclude 'line of fire' and controlled fires)
     fire_text = re.sub(r'\bline[- ]of[- ]fire\b', '', lower_text)
     if re.search(r'\b(fire|hot work|welding|sparks|combustible|flammable liquid|flash fire|burn|heat exposure|thermal|explosion)\b', fire_text):
-        detected.append("Fire & Thermal Ignition Hazard")
+        if not is_controlled_thermal_context(lower_text) and "Controlled Thermal Operation / Minor Extinguished Fire" not in detected:
+            detected.append("Fire & Thermal Ignition Hazard")
 
-    # 10. Hazardous Chemical Exposure
+    # 10. Hazardous Chemical Exposure (exclude minor contained seeps)
     if re.search(r'\b(chemical|acid|caustic|solvent|corrosive|toxic spill|chemical drum|chemical spill)\b', lower_text):
-        detected.append("Hazardous Chemical Exposure Hazard")
+        if not is_minor_contained_spill(lower_text):
+            detected.append("Hazardous Chemical Exposure Hazard")
 
     # 11. Mobile Equipment / Pedestrian Near Miss
     if any(k in lower_text for k in ["forklift", "truck", "dumper", "loader"]) and any(k in lower_text for k in ["pedestrian", "hit a pedestrian", "almost hit", "near collision", "narrowly missed", "reversing"]):

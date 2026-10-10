@@ -83,7 +83,11 @@ LEGACY_ML_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 LEGACY_ML_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Primary Dataset Path
-DEFAULT_DATASET = PROJECT_ROOT / "ml" / "data" / "sif_dataset_v2.csv"
+V5_DATASET = PROJECT_ROOT / "ml" / "data" / "sif_dataset_v5.csv"
+V4_DATASET = PROJECT_ROOT / "ml" / "data" / "sif_dataset_v4.csv"
+V3_DATASET = PROJECT_ROOT / "ml" / "data" / "sif_dataset_v3.csv"
+V2_DATASET = PROJECT_ROOT / "ml" / "data" / "sif_dataset_v2.csv"
+DEFAULT_DATASET = V5_DATASET if V5_DATASET.exists() else (V4_DATASET if V4_DATASET.exists() else V3_DATASET)
 FALLBACK_DATASET = PROJECT_ROOT / "ml" / "data" / "sif_dataset.csv"
 
 
@@ -347,7 +351,7 @@ def run_pipeline(dataset_path: Optional[Path] = None) -> Dict[str, Any]:
         print(f"  • {item['feature']:<25} weight: {item['weight']:+.4f}")
 
     # 7. Model Versioning & Artifact Storage
-    model_version = "2.1.0"
+    model_version = "2.4.0"
     timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
     # Save Pipeline, Model, and Vectorizer

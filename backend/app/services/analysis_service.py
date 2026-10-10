@@ -11,6 +11,7 @@ from ..schemas.safety_report import SafetyReportCreate
 from .report_service import find_duplicate_report, create_report
 from .historical_pattern_service import detect_and_update_weak_signals
 from ..ai_services.context_analyzer import classify_incident_category
+from ..ai_services.safety_validity import classify_safety_observation_validity
 
 FREE_TEXT_FALLBACK = "No free-text observation provided."
 
@@ -134,8 +135,8 @@ def execute_direct_analysis(
     report_date = (request.report_date or datetime.utcnow().strftime("%Y-%m-%d")).strip()
 
     # Explicitly extract and initialize selected checklist safety factors at the top
-    checklist_items: List[str] = []
-    if request.additional_context:
+    checklist_items: List[str] = list(getattr(request, "checklist", None) or getattr(request, "selected_checklist", None) or [])
+    if not checklist_items and request.additional_context:
         ctx_val = request.additional_context if isinstance(request.additional_context, str) else ", ".join(str(x) for x in request.additional_context)
         if "Safety Factors:" in ctx_val:
             factors_text = ctx_val.replace("Safety Factors:", "").strip()
@@ -178,6 +179,38 @@ def execute_direct_analysis(
     else:
         desc_to_analyze = description
         description_for_report = format_submitted_observation(description, checklist_items)
+
+    # Multi-Stage Step 1: Safety Observation Validity Layer
+    validity_input = f"{description} {request.additional_context or ''}".strip()
+    validity = classify_safety_observation_validity(validity_input)
+    if validity["is_unrelated"]:
+        return AIAnalysisExecuteResponse(
+            report_name="Unrelated Input",
+            determination_status="UNRELATED INPUT",
+            sif_precursor="NO",
+            confidence=0,
+            risk_score=0,
+            sif_potential_score=0,
+            classification=norm_type.replace('_', ' ').title(),
+            detected_hazards=[
+                "Observation does not contain a recognized workplace safety hazard or condition"
+            ],
+            energy_source="None Identified",
+            barrier_status="Not Applicable (Unrelated Input)",
+            life_saving_rule="Not Applicable",
+            iogp_rule="Not Applicable",
+            explainable_reasoning=validity["explanation"],
+            explanation=validity["explanation"],
+            why_identified={"summary": validity["explanation"]},
+            recommended_controls=[
+                "Please describe a safety hazard, unsafe condition, unsafe act, or near-miss observation."
+            ],
+            corrective_actions=[
+                "Enter an operational safety observation with details of conditions or hazards."
+            ],
+            is_unrelated=True,
+            message=validity["explanation"]
+        )
 
     # 1. Run the real current main 10-step AI NLP engine
     raw_result = analyze_safety_report(
