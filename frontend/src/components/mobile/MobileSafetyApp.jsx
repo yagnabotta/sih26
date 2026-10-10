@@ -276,7 +276,7 @@ const DEFAULT_USER_INCIDENTS = [
       'Inspect enclosure, insulation, and conductors for thermal damage.',
       'Mandate qualified electrical PPE per NFPA 70E standards.'
     ],
-    reasoning: 'Low kinetic energy trip incident without high-voltage arc hazard. Classified as controlled non-SIF operational observation.',
+    reasoning: 'Low kinetic energy trip incident without high-voltage arc hazard. Classified as non-SIF operational observation.',
     assigned_department: 'ELECTRICAL',
     assigned_department_label: 'Electrical Maintenance',
     photo_attached: false,
@@ -353,7 +353,7 @@ export default function MobileSafetyApp() {
     return DEFAULT_USER_INCIDENTS;
   });
   const [locationViewIncident, setLocationViewIncident] = useState(null);
-  const [incidentFilter, setIncidentFilter] = useState('ALL'); // 'ALL' | 'SIF' | 'CONTROLLED'
+  const [incidentFilter, setIncidentFilter] = useState('ALL'); // 'ALL' | 'SIF' | 'NON_SIF'
   const [incidentsViewMode, setIncidentsViewMode] = useState('REPORTS'); // 'REPORTS' | 'TASKS'
 
   // Response Tasks & Overview Metrics
@@ -1896,12 +1896,12 @@ export default function MobileSafetyApp() {
                   {/* INCIDENTS VIEW: REPORTED INCIDENTS */}
                   {incidentsViewMode === 'REPORTS' ? (
                     <>
-                      {/* Filter Chips: All | High SIF | Controlled */}
+                      {/* Filter Chips: All | SIF | Non-SIF */}
                       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
                         {[
                           { id: 'ALL', label: `All Reports (${reportedIncidents.length})` },
-                          { id: 'SIF', label: `🚨 High SIF (${reportedIncidents.filter(r => r.is_sif).length})` },
-                          { id: 'CONTROLLED', label: `✅ Controlled (${reportedIncidents.filter(r => !r.is_sif).length})` }
+                          { id: 'SIF', label: `🚨 SIF (${reportedIncidents.filter(r => r.is_sif).length})` },
+                          { id: 'NON_SIF', label: `Non-SIF (${reportedIncidents.filter(r => !r.is_sif).length})` }
                         ].map(chip => (
                           <button
                             key={chip.id}
@@ -1923,7 +1923,7 @@ export default function MobileSafetyApp() {
                         {reportedIncidents
                           .filter(r => {
                             if (incidentFilter === 'SIF') return r.is_sif;
-                            if (incidentFilter === 'CONTROLLED') return !r.is_sif;
+                            if (incidentFilter === 'NON_SIF') return !r.is_sif;
                             return true;
                           })
                           .map(report => (
@@ -1937,6 +1937,15 @@ export default function MobileSafetyApp() {
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full uppercase">
                                       {report.category || report.report_type || 'Near Miss'}
+                                    </span>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                                      report.status === 'Action Required'
+                                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                        : report.status === 'Resolved' || report.status === 'VERIFIED'
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                        : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    }`}>
+                                      {report.status || 'Under Review'}
                                     </span>
                                   </div>
                                   {/* Main Name */}
@@ -1985,9 +1994,9 @@ export default function MobileSafetyApp() {
                                     </div>
                                   </div>
                                   <span className={`text-[8px] font-bold mt-1 px-1.5 py-0.5 rounded-full uppercase tracking-tight ${
-                                    report.is_sif ? 'text-rose-700 bg-rose-50 border border-rose-200' : 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                                    report.is_sif ? 'text-rose-700 bg-rose-50 border border-rose-200' : 'text-slate-600 bg-slate-100 border border-slate-200'
                                   }`}>
-                                    {report.is_sif ? 'High SIF' : 'Controlled'}
+                                    {report.is_sif ? 'SIF' : 'Non-SIF'}
                                   </span>
                                 </div>
                               </div>
@@ -2680,14 +2689,19 @@ export default function MobileSafetyApp() {
                   <div className={`p-4 rounded-2xl border ${
                     aiAnalysisModalData.is_sif 
                       ? 'bg-rose-50/70 border-rose-200 text-rose-950' 
-                      : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                      : 'bg-slate-50/90 border-slate-200 text-slate-800'
                   }`}>
                     <div className="flex items-center justify-between gap-2 mb-1.5">
-                      <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${
-                        aiAnalysisModalData.is_sif ? 'bg-rose-600 text-white animate-pulse' : 'bg-emerald-600 text-white'
-                      }`}>
-                        {aiAnalysisModalData.is_sif ? '🚨 CRITICAL SIF PRECURSOR DETECTED' : '✅ CONTROLLED HAZARD'}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${
+                          aiAnalysisModalData.is_sif ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-700 text-white'
+                        }`}>
+                          {aiAnalysisModalData.is_sif ? '🚨 SIF PRECURSOR DETECTED' : 'ℹ️ NON-SIF OBSERVATION'}
+                        </span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 uppercase font-mono">
+                          {aiAnalysisModalData.status || 'Under Review'}
+                        </span>
+                      </div>
                       {/* Score in Circle */}
                       <div className="relative w-11 h-11 shrink-0 flex items-center justify-center">
                         <svg className="w-11 h-11 -rotate-90" viewBox="0 0 36 36">
