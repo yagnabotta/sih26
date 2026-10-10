@@ -2007,9 +2007,6 @@ export default function MobileSafetyApp() {
                         </button>
                       </div>
 
-                      <p className="text-[10px] font-mono text-slate-400 italic">
-                        * Note: Classification (Near Miss, Unsafe Act, or Unsafe Condition) is selected manually above. Checklists are locked in Explanation Mode.
-                      </p>
                     </div>
                   )}
 
