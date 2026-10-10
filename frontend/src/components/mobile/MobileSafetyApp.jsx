@@ -1991,21 +1991,6 @@ export default function MobileSafetyApp() {
                       </div>
 
 
-                      {/* ATTACH PHOTO */}
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => setPhotoAttached(!photoAttached)}
-                          className={`flex-1 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                            photoAttached 
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700' 
-                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                          }`}
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          <span>{photoAttached ? '✓ Photo Attached' : 'Attach Incident Photo'}</span>
-                        </button>
-                      </div>
 
                     </div>
                   )}
