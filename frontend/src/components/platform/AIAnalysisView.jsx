@@ -340,7 +340,7 @@ const CONVERSATIONAL_PATTERNS = [
   /^(hi|hii|hiii|hello|hey|heyy|yo|test|testing|check)\b/i
 ];
 
-function isUnrelatedIssue(text, checklist = []) {
+export function isUnrelatedIssue(text, checklist = []) {
   if (Array.isArray(checklist) && checklist.length > 0) {
     return false;
   }
@@ -363,11 +363,11 @@ function isUnrelatedIssue(text, checklist = []) {
   return false;
 }
 
-function isTrivialInput(text, checklist = []) {
+export function isTrivialInput(text, checklist = []) {
   return isUnrelatedIssue(text, checklist);
 }
 
-function deriveReportName(text, type, loc, checklist = []) {
+export function deriveReportName(text, type, loc, checklist = []) {
   if (!text && Array.isArray(checklist) && checklist.length > 0) {
     return `${checklist.slice(0, 2).join(' & ')} Observation (${loc})`;
   }
@@ -406,7 +406,7 @@ function deriveReportName(text, type, loc, checklist = []) {
   return `Safety Observation Report (${loc})`;
 }
 
-function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatus, sifStatus, text, checklist) {
+export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatus, sifStatus, text, checklist) {
   if (isTrivialInput(text) && (!checklist || checklist.length === 0)) return 0;
   
   const tLow = (text || '').toLowerCase();
@@ -527,7 +527,7 @@ function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatus, sifS
   return Math.max(0, Math.min(100, Math.round(Math.max(continuousScore, overrideFloor))));
 }
 
-function getDynamicRecommendations(hazard, text) {
+export function getDynamicRecommendations(hazard, text) {
   const hLow = (hazard || '').toLowerCase();
   const tLow = (text || '').toLowerCase();
   if (hLow.includes('slip') || tLow.includes('slip') || tLow.includes('slippery') || tLow.includes('slick')) {
@@ -586,7 +586,7 @@ function getDynamicRecommendations(hazard, text) {
   ];
 }
 
-function getDynamicExplanation(sifStatus, hazard, energy, exposure, barrierStatus, text) {
+export function getDynamicExplanation(sifStatus, hazard, energy, exposure, barrierStatus, text) {
   if (sifStatus === 'NO' || sifStatus === 'NON-SIF') {
     if (hazard && hazard.toLowerCase().includes('slip')) {
       return 'Classified as Non-SIF because the report indicates a slip/fall hazard but does not provide evidence of high-energy exposure, significant worker exposure, or a barrier deficiency.';
@@ -599,7 +599,7 @@ function getDynamicExplanation(sifStatus, hazard, energy, exposure, barrierStatu
   return `Potential SIF precursor identified based on detected ${energy || 'hazardous energy'} and ${exposure || 'worker exposure'} with ${barrierStatus || 'barrier deficiency'}. Immediate barrier restoration required.`;
 }
 
-function getDynamicConfidence(hazard, energy, exposure, barrierStatus, text) {
+export function getDynamicConfidence(hazard, energy, exposure, barrierStatus, text) {
   const words = (text || '').trim().split(/\s+/).filter(Boolean);
   if (words.length < 3 || (hazard === 'Insufficient Information' && energy === 'Insufficient Information')) {
     return 'Not Available';
@@ -709,7 +709,7 @@ function generateAllWeakSignalsAnalysis(storedReports, currentResult, currentTex
   return results;
 }
 
-const CLASSIFICATION_CHECKLISTS = {
+export const CLASSIFICATION_CHECKLISTS = {
   NEAR_MISS: [
     { id: 'nm_slip_trip', label: 'Slip / Trip / Fall', keywords: ['slip', 'trip', 'fall', 'stumble', 'floor'] },
     { id: 'nm_work_height', label: 'Working at height', keywords: ['height', 'scaffold', 'ladder', 'elevat', 'fall', 'tie-off'] },

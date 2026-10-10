@@ -39,7 +39,8 @@ import {
   KeyRound,
   Mail,
   Zap,
-  Cpu
+  Cpu,
+  CheckSquare
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { 
@@ -47,6 +48,18 @@ import {
   autoPersistToTotalRecords,
   evaluateSIFPrecursor
 } from '../../services/safetyStore';
+import {
+  CLASSIFICATION_CHECKLISTS,
+  ALL_CHECKLIST_ITEMS,
+  detectCategoryFromChecklist,
+  detectCategoryFromExplanation,
+  isUnrelatedIssue,
+  calculateDynamicRiskScore,
+  getDynamicRecommendations,
+  getDynamicExplanation,
+  getDynamicConfidence,
+  deriveReportName
+} from '../platform/AIAnalysisView';
 import safetyTeamWelcome from '../../assets/safety_team_welcome.jpg';
 
 // Department list for response tasks including Ambulance
@@ -164,10 +177,18 @@ export default function MobileSafetyApp() {
   const [activeTab, setActiveTab] = useState('home');
   const [isPhoneFrame, setIsPhoneFrame] = useState(true);
 
-  // Report Modal State
+  // Report Modal State (Full AI Safety Intelligence input features from website)
   const [showReportModal, setShowReportModal] = useState(false);
-  const [reportCategory, setReportCategory] = useState('Unsafe Condition');
-  const [facilityLocation, setFacilityLocation] = useState('Plant 2 – Processing Unit');
+  const [reportCategory, setReportCategory] = useState('NEAR_MISS'); // 'NEAR_MISS' | 'UNSAFE_ACT' | 'UNSAFE_CONDITION'
+  const [operatingUnit, setOperatingUnit] = useState('Unit 1'); // 'Unit 1' | 'Unit 2' | 'Unit 3' | 'Unit 4'
+  const [facilityLocation, setFacilityLocation] = useState('Unit 1 – Main Processing Area');
+  const [inputMode, setInputMode] = useState('DESCRIPTION'); // 'DESCRIPTION' | 'CHECKLIST' (mutually exclusive)
+  const [descriptionInput, setDescriptionInput] = useState('');
+  const [selectedChecklist, setSelectedChecklist] = useState([]);
+  const [checklistCategoryFilter, setChecklistCategoryFilter] = useState('ALL');
+  const [checklistSearch, setChecklistSearch] = useState('');
+  const [validationError, setValidationError] = useState('');
+  const [analysisStepText, setAnalysisStepText] = useState('');
   
   // Voice Recording & Multilingual Translation
   const [selectedLanguage, setSelectedLanguage] = useState('te'); // 'te' | 'hi' | 'en'
@@ -331,11 +352,81 @@ export default function MobileSafetyApp() {
 
   // Open report modal with specific category preset
   const openReportWithCategory = (cat) => {
-    setReportCategory(cat);
+    const mapped = (cat === 'Near Miss' || cat === 'NEAR_MISS') ? 'NEAR_MISS' : (cat === 'Unsafe Act' || cat === 'UNSAFE_ACT') ? 'UNSAFE_ACT' : 'UNSAFE_CONDITION';
+    setReportCategory(mapped);
+    setDescriptionInput('');
+    setSelectedChecklist([]);
+    setInputMode('DESCRIPTION');
     setSpokenTranscript('');
     setTranslatedEnglish('');
     setPhotoAttached(false);
+    setValidationError('');
+    setAnalysisStepText('');
     setShowReportModal(true);
+  };
+
+  const handleResetReportInput = () => {
+    setDescriptionInput('');
+    setSelectedChecklist([]);
+    setSpokenTranscript('');
+    setTranslatedEnglish('');
+    setPhotoAttached(false);
+    setValidationError('');
+    setAnalysisStepText('');
+    setOperatingUnit('Unit 1');
+    setFacilityLocation('Unit 1 – Main Processing Area');
+    setInputMode('DESCRIPTION');
+    setChecklistCategoryFilter('ALL');
+    setChecklistSearch('');
+  };
+
+  const toggleChecklistItem = (itemLabel) => {
+    setSelectedChecklist((prev) => {
+      const nextList = prev.includes(itemLabel)
+        ? prev.filter((label) => label !== itemLabel)
+        : [...prev, itemLabel];
+
+      const autoCat = detectCategoryFromChecklist(nextList);
+      if (autoCat) {
+        setReportCategory(autoCat.category);
+      }
+      return nextList;
+    });
+    if (validationError) setValidationError('');
+  };
+
+  const SAMPLE_PRESETS = [
+    {
+      title: 'Work at Height (8m unclipped)',
+      type: 'UNSAFE_ACT',
+      unit: 'Unit 4',
+      loc: 'Pipe Rack Scaffolding Bay 4',
+      desc: 'Contractor working on scaffolding platform at 8 meters elevation without clipping twin lanyards to static lifeline. Scaffolding mid-rail was temporarily unbolted for material passage.'
+    },
+    {
+      title: 'Bypassed Safety ESD Interlock',
+      type: 'UNSAFE_CONDITION',
+      unit: 'Unit 2',
+      loc: 'CPF Compressor Station Train 2',
+      desc: 'High-pressure emergency shutdown (ESD) interlock switch on discharge scrubber was bridged with copper jumper wire without bypass permit or MOC.'
+    },
+    {
+      title: 'Suspended Crane Load Near-Miss',
+      type: 'NEAR_MISS',
+      unit: 'Unit 1',
+      loc: 'Bay 2 Heavy Fabrication Shop',
+      desc: 'Worker operating overhead bridge crane in Bay 2 with worn wire rope. A 2-ton steel beam slipped during transport and swung into pedestrian walkway where two workers were walking.'
+    }
+  ];
+
+  const handleApplyPreset = (p) => {
+    setInputMode('DESCRIPTION');
+    setSelectedChecklist([]);
+    setReportCategory(p.type);
+    setOperatingUnit(p.unit);
+    setFacilityLocation(p.loc);
+    setDescriptionInput(p.desc);
+    setValidationError('');
   };
 
   // Voice Recording Control
@@ -376,6 +467,9 @@ export default function MobileSafetyApp() {
           text += evt.results[i][0].transcript;
         }
         setSpokenTranscript(text);
+        if (text) {
+          setDescriptionInput(text);
+        }
       };
 
       rec.onerror = () => {
@@ -395,7 +489,9 @@ export default function MobileSafetyApp() {
       en: 'Gas leak observed at pipeline flange in Plant 2 with workers lacking required PPE.'
     };
     setTimeout(() => {
-      setSpokenTranscript(samples[selectedLanguage] || samples.en);
+      const txt = samples[selectedLanguage] || samples.en;
+      setSpokenTranscript(txt);
+      setDescriptionInput(txt);
     }, 1500);
   };
 
@@ -406,7 +502,7 @@ export default function MobileSafetyApp() {
       try { recognitionRef.current.stop(); } catch (e) {}
     }
 
-    translateSpokenText(spokenTranscript || (selectedLanguage === 'te' 
+    translateSpokenText(spokenTranscript || descriptionInput || (selectedLanguage === 'te' 
       ? 'ప్లాంట్ 2 వద్ద గ్యాస్ పైప్‌లైన్ ఫ్లాంజ్ లీక్ అవుతోంది.' 
       : 'प्लांट 2 में गैस रिसाव देखा गया है।'));
   };
@@ -422,6 +518,7 @@ export default function MobileSafetyApp() {
       });
       if (res && res.translated_text) {
         setTranslatedEnglish(res.translated_text);
+        setDescriptionInput(res.translated_text);
       } else {
         fallbackTranslate(txt);
       }
@@ -434,43 +531,158 @@ export default function MobileSafetyApp() {
 
   const fallbackTranslate = (txt) => {
     if (selectedLanguage === 'te') {
-      setTranslatedEnglish('Gas pipeline flange is leaking at Plant 2, pressure gauge rising rapidly with PPE safety non-compliance.');
+      const tr = 'Gas pipeline flange is leaking at Plant 2, pressure gauge rising rapidly with PPE safety non-compliance.';
+      setTranslatedEnglish(tr);
+      setDescriptionInput(tr);
     } else if (selectedLanguage === 'hi') {
-      setTranslatedEnglish('Heavy gas leak detected at compressor line in Plant 2 with severe spark ignition hazard.');
+      const tr = 'Heavy gas leak detected at compressor line in Plant 2 with severe spark ignition hazard.';
+      setTranslatedEnglish(tr);
+      setDescriptionInput(tr);
     } else {
       setTranslatedEnglish(txt);
+      setDescriptionInput(txt);
     }
   };
 
-  // Submit Safety Observation & Execute Full AI Analysis Pipeline
+  // Submit Safety Observation & Execute Full AI Analysis Pipeline (Website Parity)
   const handleSaveReport = async () => {
-    const desc = translatedEnglish || spokenTranscript || `${reportCategory} identified at ${facilityLocation}`;
+    setValidationError('');
+    const rawText = (descriptionInput || translatedEnglish || spokenTranscript || '').trim();
+
+    // Mutual exclusivity & input validation
+    if (inputMode === 'DESCRIPTION') {
+      if (!rawText || rawText.length < 4) {
+        setValidationError('Please describe the safety observation with at least 4 characters, or switch to Safety Checklists.');
+        return;
+      }
+      if (isUnrelatedIssue(rawText, [])) {
+        setValidationError('Enter Correct Issue: Please describe an active operational safety observation, equipment condition, or hazard.');
+        return;
+      }
+    } else {
+      if (!selectedChecklist || selectedChecklist.length === 0) {
+        setValidationError('Please select at least one safety factor from the checklists.');
+        return;
+      }
+    }
+
     setIsSubmitting(true);
+    setAnalysisStepText('Phase 1/4: Ingesting report telemetry & parsing energy vectors...');
+
+    const step2Timer = setTimeout(() => {
+      setAnalysisStepText('Phase 2/4: Screening IOGP Life-Saving Rules & barrier failure states...');
+    }, 400);
+
+    const step3Timer = setTimeout(() => {
+      setAnalysisStepText('Phase 3/4: Correlating multi-signal interaction & detecting weak signals...');
+    }, 850);
+
+    const step4Timer = setTimeout(() => {
+      setAnalysisStepText('Phase 4/4: Computing neural risk score & SIF precursor determination...');
+    }, 1300);
+
     try {
-      const evalResult = evaluateSIFPrecursor(desc, reportCategory, reportCategory);
-      const isSIF = evalResult.isSIF;
-      const riskScore = evalResult.riskScore || (isSIF ? 92 : 45);
-      const details = extractAiIncidentDetails(desc, reportCategory);
-      const refId = `INC-${Math.floor(1000 + Math.random() * 9000)}`;
+      let finalCategory = reportCategory;
+      if (inputMode === 'CHECKLIST' && selectedChecklist.length > 0) {
+        const autoCat = detectCategoryFromChecklist(selectedChecklist);
+        if (autoCat) finalCategory = autoCat.category;
+      }
+
+      const activeText = inputMode === 'DESCRIPTION'
+        ? rawText
+        : selectedChecklist.map(factor => `- ${factor}`).join('\n');
+
+      const humanCategoryLabel = finalCategory === 'NEAR_MISS' ? 'Near Miss' : finalCategory === 'UNSAFE_ACT' ? 'Unsafe Act' : 'Unsafe Condition';
+      const locDisplay = `${operatingUnit} – ${facilityLocation}`;
+      const reportTitle = deriveReportName(inputMode === 'DESCRIPTION' ? rawText : '', finalCategory, operatingUnit, selectedChecklist);
+
+      // Attempt canonical backend AI analysis
+      let backendResult = null;
+      try {
+        backendResult = await api.executeAiAnalysis({
+          report_text: activeText,
+          description: activeText,
+          report_name: reportTitle,
+          report_type: humanCategoryLabel,
+          classification: humanCategoryLabel,
+          location: operatingUnit,
+          operating_unit: operatingUnit,
+          site: operatingUnit === 'Unit 1' ? 'Plant 01' : operatingUnit === 'Unit 2' ? 'Plant 02' : operatingUnit === 'Unit 3' ? 'Plant 03' : 'Plant 04',
+          report_date: new Date().toISOString().split('T')[0],
+          ...(selectedChecklist.length > 0 ? { additional_context: `Safety Factors: ${selectedChecklist.join(', ')}` } : {})
+        });
+      } catch (err) {
+        console.warn('Backend executeAiAnalysis fallback to local engine:', err);
+      }
+
+      let isSIF = false;
+      let dynamicRiskScore = 45;
+      let energyVector = '';
+      let lifeSavingRule = '';
+      let recommendedAction = '';
+      let barrierStatus = '';
+      let reasoning = '';
+      let refId = '';
+
+      if (backendResult) {
+        const detStatus = (backendResult.determination_status || '').toLowerCase();
+        const sifVal = backendResult.sif_precursor || (detStatus.includes('sif') && !detStatus.includes('no sif') && !detStatus.includes('not a sif') ? 'YES' : 'NO');
+        isSIF = sifVal === 'YES';
+        dynamicRiskScore = typeof backendResult.sif_potential_score === 'number'
+          ? backendResult.sif_potential_score
+          : typeof backendResult.risk_score === 'number'
+          ? backendResult.risk_score
+          : calculateDynamicRiskScore(backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, sifVal, activeText, selectedChecklist);
+        energyVector = backendResult.energy_vector || (isSIF ? 'High Energy Vector' : 'Low Mechanical Kinetic');
+        lifeSavingRule = backendResult.life_saving_rule || backendResult.iogp_rule || (isSIF ? 'Line of Fire (LSR-03)' : 'Workplace Housekeeping Standards');
+        recommendedAction = (backendResult.recommended_controls && backendResult.recommended_controls[0]) || (backendResult.corrective_actions && backendResult.corrective_actions[0]) || 'Implement immediate barrier restoration and audit.';
+        barrierStatus = backendResult.barrier_status || (isSIF ? 'CRITICAL BARRIER FAILED' : 'BARRIER ADEQUATE');
+        reasoning = backendResult.explanation || backendResult.explainable_reasoning || getDynamicExplanation(sifVal, backendResult.hazard, energyVector, 'Personnel in operational zone', barrierStatus, activeText);
+        refId = backendResult.report_reference || `REP-ID001-${Math.floor(1000 + Math.random() * 9000)}`;
+      } else {
+        const evalResult = evaluateSIFPrecursor(activeText, humanCategoryLabel, humanCategoryLabel);
+        isSIF = evalResult.isSIF;
+        dynamicRiskScore = evalResult.riskScore || (isSIF ? 88 : 35);
+        const details = extractAiIncidentDetails(activeText, humanCategoryLabel);
+        energyVector = details.energyVector;
+        lifeSavingRule = details.lifeSavingRule;
+        recommendedAction = details.recommendedAction;
+        barrierStatus = isSIF ? 'CRITICAL BARRIER FAILED / MISSING' : 'BARRIER ADEQUATE';
+        reasoning = getDynamicExplanation(isSIF ? 'YES' : 'NO', details.lifeSavingRule, energyVector, 'Field Personnel Exposed', barrierStatus, activeText);
+        refId = `REP-ID001-${Math.floor(1000 + Math.random() * 9000)}`;
+      }
+
+      const details = extractAiIncidentDetails(activeText, humanCategoryLabel);
 
       const newRecord = {
         id: Date.now(),
         report_number: refId,
         report_reference: refId,
-        title: `${reportCategory}: ${facilityLocation}`,
-        description: desc,
-        category: reportCategory,
-        location: facilityLocation,
-        reported_by: currentUser?.full_name || 'Field Reporter',
+        report_name: reportTitle,
+        title: `${humanCategoryLabel}: ${locDisplay}`,
+        description: activeText,
+        category: humanCategoryLabel,
+        report_type: humanCategoryLabel,
+        location: operatingUnit,
+        facility_unit: locDisplay,
+        reported_by: currentUser?.full_name || 'Liam Vance (Field Worker)',
         severity: isSIF ? 'CRITICAL' : 'MEDIUM',
-        status: 'ANALYZED',
+        risk_level: isSIF ? 'Critical' : 'Low',
+        sif_precursor_assessment: isSIF ? 'YES' : 'NO',
+        status: isSIF ? 'Action Required' : 'Under Review',
         is_sif: isSIF,
-        risk_score: riskScore,
-        energy_vector: details.energyVector,
-        life_saving_rule: details.lifeSavingRule,
-        recommended_action: details.recommendedAction,
+        risk_score: dynamicRiskScore,
+        ai_score: dynamicRiskScore,
+        energy_vector: energyVector,
+        energy_source: energyVector,
+        life_saving_rule: lifeSavingRule,
+        barrier_status: barrierStatus,
+        recommended_action: recommendedAction,
+        reasoning: reasoning,
         assigned_department: details.dept,
         assigned_department_label: details.deptLabel,
+        safety_factors: selectedChecklist,
+        photo_attached: photoAttached,
         created_at: new Date().toISOString()
       };
 
@@ -479,9 +691,9 @@ export default function MobileSafetyApp() {
         await api.createReport({
           title: newRecord.title,
           description: newRecord.description,
-          category: reportCategory,
-          facility_id: 1,
-          location: facilityLocation,
+          category: humanCategoryLabel,
+          facility_id: operatingUnit === 'Unit 1' ? 1 : operatingUnit === 'Unit 2' ? 2 : operatingUnit === 'Unit 3' ? 3 : 4,
+          location: locDisplay,
           reported_by: newRecord.reported_by,
           severity: newRecord.severity,
           source: 'MOBILE_APP',
@@ -491,7 +703,7 @@ export default function MobileSafetyApp() {
         console.warn('API fallback:', err);
       }
 
-      // 2. Persist to central safety records
+      // 2. Persist to central safety records (SAFETY_TOTAL_REPORTS_V3) and local storage
       autoPersistToTotalRecords([newRecord]);
       try {
         const stored = JSON.parse(localStorage.getItem('safetyai_active_reports') || '[]');
@@ -508,35 +720,39 @@ export default function MobileSafetyApp() {
       // 4. Dispatch a real response task into active tasks radar
       const newTask = {
         id: Date.now(),
-        title: `Response: ${details.lifeSavingRule}`,
-        description: `${desc} — Corrective action: ${details.recommendedAction}`,
+        title: `Response: ${lifeSavingRule}`,
+        description: `${activeText.slice(0, 80)}... — Action: ${recommendedAction}`,
         department: details.dept,
         priority: isSIF ? 'CRITICAL' : 'HIGH',
         status: 'ASSIGNED',
         claimed_by: null,
         created_at: 'Just now',
-        location: facilityLocation
+        location: locDisplay
       };
       setTasks(prev => [newTask, ...prev]);
 
       // 5. Update latest alert
       setLatestAlert({
-        title: `${reportCategory} Analyzed (${isSIF ? 'High SIF' : 'Standard'})`,
-        subtitle: `${desc.slice(0, 35)}...`,
+        title: `${humanCategoryLabel} Analyzed (${isSIF ? 'High SIF Precursor' : 'Standard Observation'})`,
+        subtitle: `${activeText.slice(0, 40)}...`,
         time: 'Just now',
         type: isSIF ? 'error' : 'warning'
       });
 
+      clearTimeout(step2Timer);
+      clearTimeout(step3Timer);
+      clearTimeout(step4Timer);
+
       // 6. Close reporting modal and open AI Analysis Results modal
       setShowReportModal(false);
-      setSpokenTranscript('');
-      setTranslatedEnglish('');
+      handleResetReportInput();
       setAiAnalysisModalData(newRecord);
 
     } catch (err) {
       alert('Error submitting report: ' + err.message);
     } finally {
       setIsSubmitting(false);
+      setAnalysisStepText('');
     }
   };
 
@@ -1484,167 +1700,471 @@ export default function MobileSafetyApp() {
 
             </div>
 
-            {/* REPORT INCIDENT MODAL (VOICE & TRANSLATION) */}
+            {/* REPORT INCIDENT MODAL (EXACT WEBSITE FEATURES + MODERN MOBILE DESIGN) */}
             {showReportModal && (
-              <div className="absolute inset-0 bg-black/60 backdrop-blur-xs z-50 flex flex-col justify-end animate-fadeIn">
-                <div className="bg-white rounded-t-[32px] p-5 space-y-4 max-h-[92%] overflow-y-auto custom-scrollbar shadow-2xl">
+              <div className="absolute inset-0 bg-black/65 backdrop-blur-xs z-50 flex flex-col justify-end animate-fadeIn">
+                <div className="bg-white rounded-t-[32px] p-5 space-y-4 max-h-[94%] overflow-y-auto custom-scrollbar shadow-2xl">
                   
+                  {/* Top Bar: Title & Reset Button */}
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <div>
-                      <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">
-                        New Safety Report
-                      </span>
-                      <h3 className="text-sm font-bold text-slate-900">
-                        Report {reportCategory}
-                      </h3>
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-orange-50 border border-orange-200 text-[#FF5A36] flex items-center justify-center">
+                        <FileText className="w-4 h-4 text-[#FF5A36]" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                          <span>SAFETY OBSERVATION INPUT</span>
+                        </h3>
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          Explainable neural analysis &amp; SIF precursor intelligence
+                        </p>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => setShowReportModal(false)}
-                      className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+
+                    <div className="flex items-center gap-1.5">
+                      {(descriptionInput || selectedChecklist.length > 0 || operatingUnit !== 'Unit 1') && (
+                        <button
+                          type="button"
+                          onClick={handleResetReportInput}
+                          className="px-2 py-1 rounded-lg bg-orange-50 hover:bg-orange-100 border border-orange-200 text-[#FF5A36] text-[10px] font-bold font-mono flex items-center gap-1 transition-colors"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>RESET</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setShowReportModal(false)}
+                        className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
-                  {submitFeedback && (
-                    <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>{submitFeedback}</span>
+                  {/* Validation Error Banner */}
+                  {validationError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{validationError}</span>
                     </div>
                   )}
 
+                  {/* 1. CLASSIFICATION TYPE / SIZE */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-700">Classification</label>
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                        CLASSIFICATION TYPE / SIZE
+                      </label>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">
+                        {inputMode === 'CHECKLIST' && selectedChecklist.length > 0 && detectCategoryFromChecklist(selectedChecklist)
+                          ? `Identified: ${detectCategoryFromChecklist(selectedChecklist).label}`
+                          : 'SELECT CATEGORY MANUALLY'}
+                      </span>
+                    </div>
                     <div className="grid grid-cols-3 gap-2">
-                      {['Near Miss', 'Hazard', 'Observation'].map(cat => (
-                        <button
-                          key={cat}
-                          onClick={() => setReportCategory(cat)}
-                          className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all ${
-                            reportCategory === cat
-                              ? 'bg-blue-600 text-white border-blue-600'
-                              : 'bg-slate-50 border-slate-200 text-slate-600'
-                          }`}
-                        >
-                          {cat}
-                        </button>
-                      ))}
+                      {[
+                        { key: 'NEAR_MISS', label: 'NEAR MISS' },
+                        { key: 'UNSAFE_ACT', label: 'UNSAFE ACT' },
+                        { key: 'UNSAFE_CONDITION', label: 'UNSAFE CONDITION' }
+                      ].map(t => {
+                        const isActive = reportCategory === t.key;
+                        return (
+                          <button
+                            key={t.key}
+                            type="button"
+                            onClick={() => {
+                              setReportCategory(t.key);
+                              if (validationError) setValidationError('');
+                            }}
+                            className={`py-2.5 px-1.5 text-center rounded-xl text-xs font-black tracking-wide uppercase transition-all cursor-pointer border ${
+                              isActive
+                                ? 'bg-gradient-to-r from-orange-500 via-[#FF5A36] to-amber-500 text-white border-orange-500 shadow-sm shadow-orange-500/20 scale-[1.02]'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-orange-50/40 hover:border-orange-200'
+                            }`}
+                          >
+                            {t.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* VOICE REPORTING MODULE */}
-                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                  {/* 2. TARGET OPERATING UNIT */}
+                  <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-800">Voice Observation</span>
-                      <button
-                        onClick={() => setNoiseIsolation(!noiseIsolation)}
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          noiseIsolation ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
-                        }`}
-                      >
-                        {noiseIsolation ? 'Noise Filter ON' : 'Raw Audio'}
-                      </button>
+                      <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                        TARGET OPERATING UNIT
+                      </label>
+                      <span className="text-[10px] font-mono text-slate-400">Plant Operational Sector</span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2">
+                      {['Unit 1', 'Unit 2', 'Unit 3', 'Unit 4'].map(u => {
+                        const isActive = operatingUnit === u;
+                        return (
+                          <button
+                            key={u}
+                            type="button"
+                            onClick={() => {
+                              setOperatingUnit(u);
+                              setFacilityLocation(`${u} – Main Operations`);
+                              if (validationError) setValidationError('');
+                            }}
+                            className={`py-2 text-center rounded-xl text-xs font-mono font-black uppercase transition-all cursor-pointer border ${
+                              isActive
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-500/20'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {u}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 3. INPUT METHOD (MUTUALLY EXCLUSIVE) */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                        INPUT METHOD <span className="font-normal text-slate-400 normal-case">(Select ONE — dual input not allowed)</span>
+                      </label>
+                      <span className="text-[10px] font-mono font-bold text-slate-500">
+                        {inputMode === 'DESCRIPTION' ? '✍️ Mode: Text Explanation' : '📋 Mode: Safety Checklists'}
+                      </span>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {[
-                        { id: 'te', label: 'తెలుగు (Telugu)' },
-                        { id: 'hi', label: 'हिंदी (Hindi)' },
-                        { id: 'en', label: 'English' }
-                      ].map(l => (
+                    <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInputMode('DESCRIPTION');
+                          setSelectedChecklist([]);
+                          if (validationError) setValidationError('');
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold font-mono tracking-wide transition-all flex items-center justify-center gap-1.5 cursor-pointer border ${
+                          inputMode === 'DESCRIPTION'
+                            ? 'bg-white text-slate-900 border-slate-300 shadow-xs'
+                            : 'text-slate-600 border-transparent hover:text-slate-900'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5 text-[#FF5A36]" />
+                        <span>1. Detailed Explanation</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInputMode('CHECKLIST');
+                          setDescriptionInput('');
+                          setSpokenTranscript('');
+                          setTranslatedEnglish('');
+                          if (validationError) setValidationError('');
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold font-mono tracking-wide transition-all flex items-center justify-center gap-1.5 cursor-pointer border ${
+                          inputMode === 'CHECKLIST'
+                            ? 'bg-white text-slate-900 border-slate-300 shadow-xs'
+                            : 'text-slate-600 border-transparent hover:text-slate-900'
+                        }`}
+                      >
+                        <CheckSquare className="w-3.5 h-3.5 text-[#FF5A36]" />
+                        <span>2. Safety Checklists</span>
+                        {selectedChecklist.length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-[#FF5A36] text-white">
+                            {selectedChecklist.length}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 4A. MODE 1: DETAILED FIELD EXPLANATION */}
+                  {inputMode === 'DESCRIPTION' && (
+                    <div className="space-y-2.5 animate-fadeIn">
+                      <div className="flex items-center justify-between text-xs">
+                        <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                          DETAILED FIELD EXPLANATION
+                        </label>
+                        <span className={`text-[11px] font-mono font-bold ${
+                          descriptionInput.length >= 240 ? 'text-[#FF5A36]' : 'text-slate-500'
+                        }`}>
+                          {descriptionInput.length} / 250 CHARACTERS
+                        </span>
+                      </div>
+
+                      <textarea
+                        rows={4}
+                        maxLength={250}
+                        value={descriptionInput}
+                        onChange={(e) => {
+                          setDescriptionInput(e.target.value.slice(0, 250));
+                          if (validationError) setValidationError('');
+                        }}
+                        className="w-full p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-900 leading-relaxed focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 placeholder:text-slate-400 transition-all"
+                        placeholder="Describe safety incident in detail..."
+                      />
+
+                      {/* Live Indic Detection & Instant Translation Chip */}
+                      {descriptionInput && /[\u0c00-\u0c7f\u0900-\u097f]/.test(descriptionInput) && (
+                        <div className="p-2.5 rounded-xl bg-orange-50 border border-orange-200 text-[11px] text-orange-950 font-medium flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                            <span>
+                              <strong>{/[\u0c00-\u0c7f]/.test(descriptionInput) ? 'Telugu (తెలుగు)' : 'Hindi (हिंदी)'}</strong> safety report detected
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const res = await api.translateVoice({
+                                  audio_text: descriptionInput,
+                                  source_language: /[\u0c00-\u0c7f]/.test(descriptionInput) ? 'te' : 'hi',
+                                  target_language: 'en'
+                                });
+                                if (res?.translated_text) {
+                                  setDescriptionInput(res.translated_text);
+                                }
+                              } catch (e) {}
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-orange-500 text-white font-mono font-bold text-[10px] cursor-pointer"
+                          >
+                            Translate Now →
+                          </button>
+                        </div>
+                      )}
+
+                      {/* VOICE OBSERVATION MODULE */}
+                      <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                            <Mic className="w-3.5 h-3.5 text-blue-600" />
+                            Voice Dictation (Telugu / Hindi / En)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setNoiseIsolation(!noiseIsolation)}
+                            className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                              noiseIsolation ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                            }`}
+                          >
+                            {noiseIsolation ? 'Noise Filter ON' : 'Raw Audio'}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1">
+                          {[
+                            { id: 'te', label: 'తెలుగు (Telugu)' },
+                            { id: 'hi', label: 'हिंदी (Hindi)' },
+                            { id: 'en', label: 'English' }
+                          ].map(l => (
+                            <button
+                              key={l.id}
+                              type="button"
+                              onClick={() => setSelectedLanguage(l.id)}
+                              className={`py-1 px-1 rounded-lg text-[10px] font-bold border transition-all ${
+                                selectedLanguage === l.id
+                                  ? 'bg-white border-blue-600 text-blue-700 shadow-2xs'
+                                  : 'bg-transparent border-slate-200 text-slate-500'
+                              }`}
+                            >
+                              {l.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="py-1 flex items-center justify-center gap-3">
+                          <button
+                            type="button"
+                            onClick={toggleRecording}
+                            className={`w-11 h-11 rounded-full flex items-center justify-center shadow-md transition-all ${
+                              isRecording
+                                ? 'bg-red-500 text-white ring-4 ring-red-200 animate-pulse'
+                                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/30'
+                            }`}
+                          >
+                            {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                          </button>
+                          <span className="text-[11px] text-slate-600 font-medium">
+                            {isRecording ? `Listening... (${recordingSeconds}s)` : 'Tap to speak observation'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* QUICK TEST SCENARIO PRESETS */}
+                      <div className="space-y-1 pt-1">
+                        <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
+                          ⚡ 1-Tap Sample Presets (From Platform)
+                        </span>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {SAMPLE_PRESETS.map((p, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => handleApplyPreset(p)}
+                              className="p-1.5 rounded-xl bg-slate-50 border border-slate-200 text-[10px] font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 text-left transition-all leading-tight"
+                            >
+                              {p.title}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* ATTACH PHOTO */}
+                      <div className="flex items-center gap-2 pt-1">
                         <button
-                          key={l.id}
-                          onClick={() => setSelectedLanguage(l.id)}
-                          className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all ${
-                            selectedLanguage === l.id
-                              ? 'bg-white border-blue-600 text-blue-700 shadow-2xs'
-                              : 'bg-transparent border-slate-200 text-slate-500'
+                          type="button"
+                          onClick={() => setPhotoAttached(!photoAttached)}
+                          className={`flex-1 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                            photoAttached 
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                           }`}
                         >
-                          {l.label}
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>{photoAttached ? '✓ Photo Attached' : 'Attach Incident Photo'}</span>
                         </button>
-                      ))}
-                    </div>
+                      </div>
 
-                    <div className="py-2 flex flex-col items-center justify-center">
-                      <button
-                        onClick={toggleRecording}
-                        className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all ${
-                          isRecording
-                            ? 'bg-red-500 text-white ring-4 ring-red-200 animate-pulse'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/30'
-                        }`}
-                      >
-                        {isRecording ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-                      </button>
-                      <p className="text-[11px] text-slate-500 mt-2 font-medium">
-                        {isRecording ? `Recording... (${recordingSeconds}s)` : 'Tap to speak observation'}
+                      <p className="text-[10px] font-mono text-slate-400 italic">
+                        * Note: Classification (Near Miss, Unsafe Act, or Unsafe Condition) is selected manually above. Checklists are locked in Explanation Mode.
                       </p>
                     </div>
+                  )}
 
-                    {(spokenTranscript || translatedEnglish) && (
-                      <div className="space-y-2 pt-1 border-t border-slate-200 text-xs">
-                        {spokenTranscript && (
-                          <div className="p-2 rounded-xl bg-white border border-slate-200 text-slate-700">
-                            <span className="text-[10px] font-bold text-slate-400 block">ORIGINAL SPEECH</span>
-                            {spokenTranscript}
-                          </div>
-                        )}
-                        {translatedEnglish && (
-                          <div className="p-2 rounded-xl bg-blue-50 border border-blue-200 text-blue-900">
-                            <span className="text-[10px] font-bold text-blue-600 block flex items-center gap-1">
-                              <Sparkles className="w-3 h-3" />
-                              TRANSLATED TO ENGLISH (FOR SIF ENGINE)
-                            </span>
-                            {translatedEnglish}
-                          </div>
-                        )}
+                  {/* 4B. MODE 2: STRUCTURED SAFETY CHECKLISTS */}
+                  {inputMode === 'CHECKLIST' && (
+                    <div className="space-y-3 animate-fadeIn">
+                      {/* Description Locked Notice */}
+                      <div className="p-2.5 rounded-xl bg-slate-100 border border-dashed border-slate-300 text-[11px] font-mono text-slate-600 flex items-center justify-between">
+                        <span>✍️ Field description disabled ({selectedChecklist.length} selected).</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInputMode('DESCRIPTION');
+                            setSelectedChecklist([]);
+                          }}
+                          className="text-blue-600 hover:underline font-bold"
+                        >
+                          Switch to Explanation
+                        </button>
                       </div>
-                    )}
-                  </div>
 
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-700">Location</label>
-                    <input
-                      type="text"
-                      value={facilityLocation}
-                      onChange={(e) => setFacilityLocation(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 font-medium focus:outline-none focus:border-blue-600"
-                    />
-                  </div>
+                      {/* Checklist Search & Filter Tabs */}
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={checklistSearch}
+                            onChange={(e) => setChecklistSearch(e.target.value)}
+                            placeholder="Search factors (e.g., fall, gas, loto)..."
+                            className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-blue-600"
+                          />
+                        </div>
 
-                  <div className="flex items-center gap-2">
+                        {/* Category filter tabs */}
+                        <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-none">
+                          {[
+                            { id: 'ALL', label: 'All', count: ALL_CHECKLIST_ITEMS.length },
+                            { id: 'NEAR_MISS', label: 'Near Miss', count: CLASSIFICATION_CHECKLISTS.NEAR_MISS.length },
+                            { id: 'UNSAFE_ACT', label: 'Unsafe Act', count: CLASSIFICATION_CHECKLISTS.UNSAFE_ACT.length },
+                            { id: 'UNSAFE_CONDITION', label: 'Condition', count: CLASSIFICATION_CHECKLISTS.UNSAFE_CONDITION.length }
+                          ].map(tab => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => setChecklistCategoryFilter(tab.id)}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold font-mono transition-all whitespace-nowrap border ${
+                                checklistCategoryFilter === tab.id
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                              }`}
+                            >
+                              {tab.label} ({tab.count})
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Checklist Options Chips */}
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-2xl bg-slate-50 border border-slate-200 custom-scrollbar">
+                        {ALL_CHECKLIST_ITEMS
+                          .filter(item => checklistCategoryFilter === 'ALL' || item.category === checklistCategoryFilter)
+                          .filter(item => {
+                            if (!checklistSearch.trim()) return true;
+                            const q = checklistSearch.toLowerCase();
+                            return item.label.toLowerCase().includes(q) || (item.keywords && item.keywords.some(k => k.includes(q)));
+                          })
+                          .map(item => {
+                            const isChecked = selectedChecklist.includes(item.label);
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => toggleChecklistItem(item.label)}
+                                className={`w-full p-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between border transition-all ${
+                                  isChecked
+                                    ? 'bg-blue-50 border-blue-500 text-blue-900 shadow-2xs'
+                                    : 'bg-white border-slate-200/80 text-slate-700 hover:bg-slate-100'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-4 h-4 rounded flex items-center justify-center border text-[10px] ${
+                                    isChecked ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 bg-white'
+                                  }`}>
+                                    {isChecked && '✓'}
+                                  </div>
+                                  <span>{item.label}</span>
+                                </div>
+                                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                  item.category === 'NEAR_MISS' ? 'bg-orange-100 text-orange-700' :
+                                  item.category === 'UNSAFE_ACT' ? 'bg-purple-100 text-purple-700' :
+                                  'bg-blue-100 text-blue-700'
+                                }`}>
+                                  {item.categoryLabel}
+                                </span>
+                              </button>
+                            );
+                          })}
+                      </div>
+
+                      {selectedChecklist.length > 0 && (
+                        <div className="flex items-center justify-between text-xs pt-1">
+                          <span className="text-[11px] font-bold text-slate-600">
+                            {selectedChecklist.length} factors selected
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedChecklist([])}
+                            className="text-[11px] text-[#FF5A36] font-bold underline"
+                          >
+                            Clear All
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 5. SUBMIT & RUN AI ANALYSIS BUTTON */}
+                  <div className="pt-2">
                     <button
-                      type="button"
-                      onClick={() => setPhotoAttached(!photoAttached)}
-                      className={`flex-1 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                        photoAttached 
-                          ? 'bg-emerald-50 border-emerald-300 text-emerald-700' 
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                      }`}
+                      onClick={handleSaveReport}
+                      disabled={isSubmitting}
+                      className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-sm tracking-wide shadow-md shadow-blue-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-60 cursor-pointer active:scale-[0.99]"
                     >
-                      <Camera className="w-4 h-4" />
-                      <span>{photoAttached ? '✓ Photo Attached' : 'Attach Photo'}</span>
+                      {isSubmitting ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span className="truncate">{analysisStepText || 'Analyzing SIF Precursors & Storing...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4 text-amber-300" />
+                          <span>Run AI Analysis &amp; Store Record</span>
+                        </>
+                      )}
                     </button>
                   </div>
-
-                  <button
-                    onClick={handleSaveReport}
-                    disabled={isSubmitting}
-                    className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm tracking-wide shadow-md shadow-blue-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        <span>Analyzing SIF Precursors & Storing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4" />
-                        <span>Run AI Analysis & Store Record</span>
-                      </>
-                    )}
-                  </button>
 
                 </div>
               </div>
@@ -1738,7 +2258,7 @@ export default function MobileSafetyApp() {
                     {/* AI Recommended Remediation */}
                     <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200 space-y-1">
                       <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3 text-blue-600" /> Recommended Corrective Action
+                        <CheckCircle2 className="w-3 h-3 text-blue-600" /> Recommended Corrective Action
                       </span>
                       <p className="font-semibold text-blue-950 leading-relaxed">{aiAnalysisModalData.recommended_action}</p>
                     </div>
