@@ -1495,7 +1495,7 @@ export default function AIAnalysisView() {
                 <FileText className="w-6 h-6 text-[#FF5A36]" />
                 <span>SAFETY OBSERVATION INPUT</span>
               </h3>
-              {(description || location !== 'Unit 1' || selectedChecklist.length > 0 || analysisResult) ? (
+              {(description || location !== 'Unit 1' || selectedChecklist.length > 0 || analysisResult) && (
                 <button
                   type="button"
                   onClick={handleReset}
@@ -1505,11 +1505,6 @@ export default function AIAnalysisView() {
                   <RotateCcw className="w-4 h-4" />
                   <span>RESET INPUT</span>
                 </button>
-              ) : (
-                <span className="text-xs sm:text-sm text-emerald-700 font-mono font-black flex items-center gap-2 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE INPUT READY
-                </span>
               )}
             </div>
 
