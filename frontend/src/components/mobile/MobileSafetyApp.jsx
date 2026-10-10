@@ -1640,9 +1640,11 @@ export default function MobileSafetyApp() {
                     className="relative p-2 rounded-full hover:bg-slate-50 transition-colors"
                   >
                     <Bell className="w-5 h-5 text-slate-700" />
-                    <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white font-bold text-[9px] rounded-full flex items-center justify-center border-2 border-white shadow-xs">
-                      3
-                    </span>
+                    {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length > 0 && (
+                      <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white font-bold text-[9px] rounded-full flex items-center justify-center border-2 border-white shadow-xs">
+                        {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length}
+                      </span>
+                    )}
                   </button>
 
                   {/* Sign Out Button to return to Welcome */}
@@ -2113,84 +2115,71 @@ export default function MobileSafetyApp() {
                 </div>
               )}
 
-              {/* TAB: ALERTS & SOS */}
+              {/* TAB: ALERTS (Department Action Notifications) */}
               {activeTab === 'alerts' && (
                 <div className="space-y-4 animate-fadeIn">
                   
                   <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                      Critical Alerts & SIF Radar
-                    </h2>
-                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
-                      Real-time
-                    </span>
-                  </div>
-
-                  {/* EMERGENCY SOS TRIGGER CARD */}
-                  <div className="bg-gradient-to-br from-rose-500 to-red-600 rounded-2xl p-4 text-white shadow-md space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Flame className="w-5 h-5 text-amber-200 animate-pulse" />
-                        <span className="font-bold text-sm">Emergency SOS Broadcast</span>
-                      </div>
-                      <span className="text-[10px] font-mono bg-black/20 px-2 py-0.5 rounded">
-                        GPS Active
-                      </span>
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                        Department Action Alerts
+                      </h2>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Live acceptance & response updates from dispatched departments
+                      </p>
                     </div>
-                    <p className="text-xs text-rose-100 leading-relaxed">
-                      Triggers immediate siren broadcast, stops hot work permits at Plant 2, and dispatches emergency rescue.
-                    </p>
-
-                    {sosDispatched ? (
-                      <div className="p-3 bg-white text-slate-900 rounded-xl text-xs font-bold text-center">
-                        🚨 Emergency Rescue Dispatched to Plant 2!
-                      </div>
-                    ) : sosCountdown !== null ? (
-                      <div className="p-3 bg-white text-rose-600 rounded-xl text-lg font-black text-center animate-ping">
-                        Broadcasting in {sosCountdown}...
-                      </div>
-                    ) : (
-                      <button
-                        onClick={triggerSos}
-                        className="w-full py-2.5 rounded-xl bg-white text-red-600 hover:bg-rose-50 font-black text-xs uppercase tracking-wider shadow-sm transition-all"
-                      >
-                        Tap to Trigger Emergency SOS
-                      </button>
+                    {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length > 0 && (
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 font-mono">
+                        {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length} Accepted
+                      </span>
                     )}
                   </div>
 
-                  {/* SIF PRECURSOR COMBINATIONS */}
-                  <div className="space-y-2.5">
-                    <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                      Weak Signal Correlations Detected
-                    </h3>
-
-                    {[
-                      {
-                        title: 'PPE Non-compliance + Open Trench',
-                        location: 'Plant 2 Foundation Bay',
-                        risk: 'HIGH SIF',
-                        vector: 'GRAVITY_FALL'
-                      },
-                      {
-                        title: 'Flange Pressure Spike + Vibration',
-                        location: 'Compressor Unit 1',
-                        risk: 'CRITICAL SIF',
-                        vector: 'HYDROCARBON_PRESSURE'
-                      }
-                    ].map((item, i) => (
-                      <div key={i} className="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-2xs space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-50 text-red-600">
-                            {item.risk}
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono">{item.vector}</span>
-                        </div>
-                        <div className="text-xs font-bold text-slate-900">{item.title}</div>
-                        <div className="text-[11px] text-slate-500">📍 {item.location}</div>
+                  {tasks.filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED').length > 0 ? (
+                    <div className="space-y-2.5">
+                      {tasks
+                        .filter(t => t.status === 'ACCEPTED' || t.status === 'VERIFIED')
+                        .map(task => (
+                          <div
+                            key={task.id}
+                            className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-2xs space-y-2"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono">
+                                ✅ ACCEPTED BY {task.department || 'DISPATCH'}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">{task.created_at || 'Recently'}</span>
+                            </div>
+                            <div className="text-xs font-bold text-slate-900">{task.title}</div>
+                            <div className="text-[11px] text-slate-600 leading-relaxed">{task.description}</div>
+                            {task.location && (
+                              <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                                <MapPin className="w-3 h-3 text-blue-500" />
+                                <span>{task.location}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    /* Clean Empty State as Responder Platform is Not Yet Integrated */
+                    <div className="py-14 px-6 rounded-2xl bg-white border border-slate-100 shadow-2xs text-center space-y-3.5">
+                      <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 text-slate-400 mx-auto flex items-center justify-center">
+                        <Bell className="w-6 h-6 text-slate-400" />
                       </div>
-                    ))}
-                  </div>
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-bold text-slate-800">No Department Alerts Yet</h3>
+                        <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">
+                          When emergency response departments (Ambulance, Mechanical, Electrical) accept and action your submitted reports, confirmation alerts will appear here.
+                        </p>
+                      </div>
+                      <div className="pt-1">
+                        <span className="inline-flex items-center gap-1.5 text-[10px] font-bold font-mono text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
+                          <span>Awaiting Responder Platform Integration</span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                 </div>
               )}
