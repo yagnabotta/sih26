@@ -26,7 +26,16 @@ export const api = {
         })
       });
       if (res.ok) {
-        return await res.json();
+        const data = await res.json();
+        if (data && data.access_token) {
+          try {
+            localStorage.setItem('safetyai_token', data.access_token);
+            if (data.user) {
+              localStorage.setItem('safetyai_user', JSON.stringify(data.user));
+            }
+          } catch (e) {}
+        }
+        return data;
       }
       if (res.status === 401 || res.status === 422) {
         const errData = await res.json().catch(() => ({}));
@@ -85,21 +94,27 @@ export const api = {
 
     if (ROLE_ACCOUNTS[cleanEmail]) {
       const acc = ROLE_ACCOUNTS[cleanEmail];
+      const fallbackToken = `safetyai-token-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`;
+      const fallbackUser = {
+        id: Date.now(),
+        organization_id: cleanOrg || 'id001',
+        email: cleanEmail,
+        full_name: acc.name,
+        role: acc.role,
+        role_name: acc.role === 'ADMINISTRATOR' ? 'Administrator' : acc.role === 'RESPONDER' ? 'Response Specialist' : 'Field Worker',
+        is_admin: acc.is_admin,
+        department: acc.dept,
+        organization_name: 'Oil India Limited – Operational Safety Unit',
+        permissions: acc.is_admin ? ['ALL', 'VIEW_DASHBOARD', 'AUDIT'] : ['VIEW_DASHBOARD', 'SUBMIT_OBSERVATION']
+      };
+      try {
+        localStorage.setItem('safetyai_token', fallbackToken);
+        localStorage.setItem('safetyai_user', JSON.stringify(fallbackUser));
+      } catch (e) {}
       return {
-        access_token: `safetyai-token-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+        access_token: fallbackToken,
         token_type: 'bearer',
-        user: {
-          id: Date.now(),
-          organization_id: cleanOrg || 'id001',
-          email: cleanEmail,
-          full_name: acc.name,
-          role: acc.role,
-          role_name: acc.role === 'ADMINISTRATOR' ? 'Administrator' : acc.role === 'RESPONDER' ? 'Response Specialist' : 'Field Worker',
-          is_admin: acc.is_admin,
-          department: acc.dept,
-          organization_name: 'Oil India Limited – Operational Safety Unit',
-          permissions: acc.is_admin ? ['ALL', 'VIEW_DASHBOARD', 'AUDIT'] : ['VIEW_DASHBOARD', 'SUBMIT_OBSERVATION']
-        }
+        user: fallbackUser
       };
     }
 
