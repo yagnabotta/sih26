@@ -40,9 +40,14 @@ import {
   Mail,
   Zap,
   Cpu,
-  CheckSquare
+  CheckSquare,
+  Building2,
+  Navigation,
+  Layers
 } from 'lucide-react';
 import { api } from '../../services/api';
+import IncidentLocationModal from '../platform/maps/IncidentLocationModal';
+import IncidentPostAnalysisMap from '../platform/maps/IncidentPostAnalysisMap';
 import { 
   getStoreState, 
   autoPersistToTotalRecords,
@@ -212,6 +217,12 @@ export default function MobileSafetyApp() {
   const [voiceSearchNoiseFilter, setVoiceSearchNoiseFilter] = useState(true);
   const voiceSearchRecRef = useRef(null);
   const voiceSearchTimerRef = useRef(null);
+
+  // Incident Map Location State
+  const [showMapModal, setShowMapModal] = useState(false);
+  const [selectedIncidentLocation, setSelectedIncidentLocation] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [isRequestingLocation, setIsRequestingLocation] = useState(false);
 
   // Response Tasks & Overview Metrics
   const [tasks, setTasks] = useState([]);
@@ -385,6 +396,7 @@ export default function MobileSafetyApp() {
     setAnalysisStepText('');
     setOperatingUnit('Unit 1');
     setFacilityLocation('Unit 1 – Main Processing Area');
+    setSelectedIncidentLocation(null);
     setInputMode('DESCRIPTION');
     setChecklistCategoryFilter('ALL');
     setChecklistSearch('');
@@ -435,8 +447,55 @@ export default function MobileSafetyApp() {
     setReportCategory(p.type);
     setOperatingUnit(p.unit);
     setFacilityLocation(p.loc);
+    setSelectedIncidentLocation({
+      latitude: p.unit === 'Unit 2' ? 12.9730 : p.unit === 'Unit 3' ? 12.9700 : p.unit === 'Unit 4' ? 12.9690 : 12.9716,
+      longitude: p.unit === 'Unit 2' ? 77.5960 : p.unit === 'Unit 3' ? 77.5930 : p.unit === 'Unit 4' ? 77.5910 : 77.5946,
+      name: p.loc,
+      address: p.loc,
+      unit: p.unit
+    });
     setDescriptionInput(p.desc);
     setValidationError('');
+  };
+
+  // Map Location Trigger with Geolocation Context
+  const handleOpenMapClick = () => {
+    if (validationError) setValidationError('');
+
+    if (!navigator.geolocation) {
+      setShowMapModal(true);
+      return;
+    }
+
+    setIsRequestingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIsRequestingLocation(false);
+        setUserLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        });
+        setShowMapModal(true);
+      },
+      () => {
+        setIsRequestingLocation(false);
+        setShowMapModal(true);
+      },
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }
+    );
+  };
+
+  const handleConfirmLocation = (loc) => {
+    setSelectedIncidentLocation(loc);
+    if (loc?.unit) {
+      setOperatingUnit(loc.unit);
+    } else if (loc?.name && ['Unit 1', 'Unit 2', 'Unit 3', 'Unit 4'].includes(loc.name)) {
+      setOperatingUnit(loc.name);
+    }
+    if (loc?.address || loc?.name) {
+      setFacilityLocation(loc.address || loc.name);
+    }
+    if (validationError) setValidationError('');
   };
 
   // Voice Recording Control
@@ -734,6 +793,14 @@ export default function MobileSafetyApp() {
       const locDisplay = `${operatingUnit} – ${facilityLocation}`;
       const reportTitle = deriveReportName(inputMode === 'DESCRIPTION' ? rawText : '', finalCategory, operatingUnit, selectedChecklist);
 
+      const incidentLocObj = selectedIncidentLocation || {
+        latitude: operatingUnit === 'Unit 2' ? 12.9730 : operatingUnit === 'Unit 3' ? 12.9700 : operatingUnit === 'Unit 4' ? 12.9690 : 12.9716,
+        longitude: operatingUnit === 'Unit 2' ? 77.5960 : operatingUnit === 'Unit 3' ? 77.5930 : operatingUnit === 'Unit 4' ? 77.5910 : 77.5946,
+        name: facilityLocation || operatingUnit,
+        address: facilityLocation || operatingUnit,
+        unit: operatingUnit
+      };
+
       // Attempt canonical backend AI analysis
       let backendResult = null;
       try {
@@ -746,6 +813,11 @@ export default function MobileSafetyApp() {
           location: operatingUnit,
           operating_unit: operatingUnit,
           site: operatingUnit === 'Unit 1' ? 'Plant 01' : operatingUnit === 'Unit 2' ? 'Plant 02' : operatingUnit === 'Unit 3' ? 'Plant 03' : 'Plant 04',
+          incidentLocation: incidentLocObj,
+          incident_latitude: incidentLocObj.latitude,
+          incident_longitude: incidentLocObj.longitude,
+          incident_location_name: incidentLocObj.name,
+          incident_address: incidentLocObj.address,
           report_date: new Date().toISOString().split('T')[0],
           ...(selectedChecklist.length > 0 ? { additional_context: `Safety Factors: ${selectedChecklist.join(', ')}` } : {})
         });
@@ -803,6 +875,10 @@ export default function MobileSafetyApp() {
         report_type: humanCategoryLabel,
         location: operatingUnit,
         facility_unit: locDisplay,
+        incidentLocation: incidentLocObj,
+        incident_latitude: incidentLocObj.latitude,
+        incident_longitude: incidentLocObj.longitude,
+        incident_address: incidentLocObj.address,
         reported_by: currentUser?.full_name || 'Liam Vance (Field Worker)',
         severity: isSIF ? 'CRITICAL' : 'MEDIUM',
         risk_level: isSIF ? 'Critical' : 'Low',
@@ -1902,14 +1978,23 @@ export default function MobileSafetyApp() {
                     </div>
                   </div>
 
-                  {/* 2. TARGET OPERATING UNIT */}
-                  <div className="space-y-1.5">
+                  {/* 2. INCIDENT LOCATION & PLANT MAP */}
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs">
-                      <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
-                        TARGET OPERATING UNIT
+                      <label className="text-[11px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-blue-600" />
+                        <span>INCIDENT LOCATION & UNIT</span>
                       </label>
-                      <span className="text-[10px] font-mono text-slate-400">Plant Operational Sector</span>
+                      <button
+                        type="button"
+                        onClick={handleOpenMapClick}
+                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Layers className="w-3 h-3 text-blue-600" />
+                        <span>{selectedIncidentLocation ? 'Change Pin on Map' : 'Select on Map'}</span>
+                      </button>
                     </div>
+
                     <div className="grid grid-cols-4 gap-2">
                       {['Unit 1', 'Unit 2', 'Unit 3', 'Unit 4'].map(u => {
                         const isActive = operatingUnit === u;
@@ -1920,6 +2005,12 @@ export default function MobileSafetyApp() {
                             onClick={() => {
                               setOperatingUnit(u);
                               setFacilityLocation(`${u} – Main Operations`);
+                              if (selectedIncidentLocation) {
+                                setSelectedIncidentLocation(prev => ({
+                                  ...prev,
+                                  unit: u
+                                }));
+                              }
                               if (validationError) setValidationError('');
                             }}
                             className={`py-2 text-center rounded-xl text-xs font-mono font-black uppercase transition-all cursor-pointer border ${
@@ -1932,6 +2023,40 @@ export default function MobileSafetyApp() {
                           </button>
                         );
                       })}
+                    </div>
+
+                    {/* Interactive Plant Map Location Card & Trigger */}
+                    <div 
+                      onClick={handleOpenMapClick}
+                      className="p-3 rounded-2xl bg-gradient-to-r from-blue-50/90 to-indigo-50/70 border border-blue-200 shadow-2xs hover:border-blue-400 hover:shadow-xs transition-all cursor-pointer flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                          selectedIncidentLocation ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30' : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          <MapPin className="w-5 h-5" />
+                        </div>
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono font-black uppercase px-1.5 py-0.2 rounded bg-white border border-blue-200 text-blue-800">
+                              {operatingUnit}
+                            </span>
+                            <span className="text-[11px] font-bold text-slate-900 truncate max-w-[170px]">
+                              {selectedIncidentLocation?.name || facilityLocation}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 line-clamp-1">
+                            {selectedIncidentLocation?.address || 'Tap to pinpoint exact equipment coordinates on satellite map'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold shadow-2xs inline-flex items-center gap-1">
+                          <span>{isRequestingLocation ? 'Locating...' : selectedIncidentLocation ? 'Edit Map' : 'Open Map'}</span>
+                          <ChevronRight className="w-3 h-3" />
+                        </span>
+                      </div>
                     </div>
                   </div>
 
@@ -2298,6 +2423,27 @@ export default function MobileSafetyApp() {
                       </span>
                     </div>
 
+                    {/* Plant Site Map & Exclusion Zone */}
+                    <div className="space-y-1.5 pt-1">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5 text-blue-600" /> Plant Site Map & Sector Pin
+                      </span>
+                      <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-2xs">
+                        <IncidentPostAnalysisMap
+                          incidentLocation={aiAnalysisModalData.incidentLocation || {
+                            latitude: 12.9716,
+                            longitude: 77.5946,
+                            name: aiAnalysisModalData.location || operatingUnit,
+                            address: aiAnalysisModalData.location || operatingUnit
+                          }}
+                          riskScore={aiAnalysisModalData.risk_score || 75}
+                          riskLevel={aiAnalysisModalData.is_sif ? 'High Risk' : 'Medium Risk'}
+                          incidentType={aiAnalysisModalData.type || 'Near Miss'}
+                          reportName={aiAnalysisModalData.title}
+                        />
+                      </div>
+                    </div>
+
                   </div>
 
                   {/* Bottom Actions */}
@@ -2343,6 +2489,27 @@ export default function MobileSafetyApp() {
                     >
                       <X className="w-4 h-4" />
                     </button>
+                  </div>
+
+                  {/* Task Map Location Preview */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-blue-600" /> Incident Location & Plant Sector
+                    </span>
+                    <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs">
+                      <IncidentPostAnalysisMap
+                        incidentLocation={selectedTaskModal.incidentLocation || {
+                          latitude: selectedTaskModal.department === 'ELECTRICAL' ? 12.9730 : selectedTaskModal.department === 'FIRE_SAFETY' ? 12.9716 : 12.9700,
+                          longitude: selectedTaskModal.department === 'ELECTRICAL' ? 77.5960 : selectedTaskModal.department === 'FIRE_SAFETY' ? 77.5946 : 77.5930,
+                          name: selectedTaskModal.location || selectedTaskModal.department || 'Plant Sector',
+                          address: selectedTaskModal.location || `${selectedTaskModal.department} Operational Bay`
+                        }}
+                        riskScore={selectedTaskModal.priority === 'CRITICAL' ? 88 : 45}
+                        riskLevel={selectedTaskModal.priority === 'CRITICAL' ? 'High Risk' : 'Medium Risk'}
+                        incidentType="Dispatched Response"
+                        reportName={selectedTaskModal.title}
+                      />
+                    </div>
                   </div>
 
                   {showReworkInput ? (
@@ -2666,6 +2833,16 @@ export default function MobileSafetyApp() {
                 </div>
               </div>
             )}
+
+            {/* 7. INCIDENT LOCATION SELECTION MODAL (MAP PICKER) */}
+            <IncidentLocationModal
+              isOpen={showMapModal}
+              onClose={() => setShowMapModal(false)}
+              initialLocation={selectedIncidentLocation}
+              userLocation={userLocation}
+              selectedUnit={operatingUnit}
+              onConfirm={handleConfirmLocation}
+            />
 
             {/* BOTTOM NAVIGATION BAR: DOCKED WHITE BAR WITH CENTER VOICE SEARCH BUTTON */}
             <nav aria-label="Main Navigation" className="h-18 bg-white border-t border-slate-100 px-4 flex items-center justify-between sticky bottom-0 z-40 shadow-lg shadow-slate-200/50">
