@@ -32,6 +32,8 @@ class AIAnalysisRequest(BaseModel):
     site: Optional[str] = None
     report_date: Optional[str] = None
     additional_context: Optional[Union[str, List[str]]] = None
+    checklist: Optional[List[str]] = None
+    selected_checklist: Optional[List[str]] = None
     legacy_scoring: Optional[bool] = Field(default=False, description="Enable legacy additive MAUT risk scoring model for comparison")
     incident_latitude: Optional[float] = Field(None, ge=-90.0, le=90.0)
     incident_longitude: Optional[float] = Field(None, ge=-180.0, le=180.0)
@@ -50,6 +52,10 @@ class AIAnalysisRequest(BaseModel):
                 values["report_type"] = values.get("classification") or "NEAR_MISS"
             if isinstance(values.get("additional_context"), list):
                 values["additional_context"] = f"Safety Factors: {', '.join(str(x) for x in values['additional_context'])}"
+            elif not values.get("additional_context"):
+                items = values.get("checklist") or values.get("selected_checklist")
+                if items and isinstance(items, list):
+                    values["additional_context"] = f"Safety Factors: {', '.join(str(x) for x in items)}"
         return values
 
 class AIAnalysisExecuteResponse(BaseModel):

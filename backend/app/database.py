@@ -64,6 +64,35 @@ def ensure_database_schema():
                     if col_name not in existing_user_cols:
                         conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
+
+            # Check feedbacks table
+            feedback_result = conn.execute(text("PRAGMA table_info(feedbacks)"))
+            existing_feedback_cols = {row[1] for row in feedback_result.fetchall()}
+            if existing_feedback_cols:
+                new_feedback_cols = [
+                    ("human_sif_decision", "VARCHAR(50)"),
+                    ("human_sif_score", "INTEGER"),
+                    ("review_status", "VARCHAR(50) DEFAULT 'COMPLETED'")
+                ]
+                for col_name, col_type in new_feedback_cols:
+                    if col_name not in existing_feedback_cols:
+                        conn.execute(text(f"ALTER TABLE feedbacks ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
+
+            # Check weak_signal_reviews table
+            review_result = conn.execute(text("PRAGMA table_info(weak_signal_reviews)"))
+            existing_review_cols = {row[1] for row in review_result.fetchall()}
+            if existing_review_cols:
+                new_review_cols = [
+                    ("decision", "VARCHAR(100)"),
+                    ("reviewer", "VARCHAR(100)"),
+                    ("reviewer_notes", "TEXT"),
+                    ("reviewed_at", "DATETIME")
+                ]
+                for col_name, col_type in new_review_cols:
+                    if col_name not in existing_review_cols:
+                        conn.execute(text(f"ALTER TABLE weak_signal_reviews ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
         except Exception as e:
             print("Database schema update notice:", e)
 

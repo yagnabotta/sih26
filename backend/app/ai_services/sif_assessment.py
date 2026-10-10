@@ -45,6 +45,36 @@ except (ImportError, ValueError):
         detect_all_hazards = None
         HAZARD_SEVERITY_WEIGHTS = {}
 
+try:
+    from .safety_context import (
+        is_negative_context,
+        is_controlled_thermal_context,
+        is_minor_contained_spill,
+        is_catastrophic_explosion,
+        is_spreading_process_fire,
+        is_critical_toxic_or_chemical_release,
+        is_vague_or_missing_info
+    )
+except (ImportError, ValueError):
+    try:
+        from safety_context import (
+            is_negative_context,
+            is_controlled_thermal_context,
+            is_minor_contained_spill,
+            is_catastrophic_explosion,
+            is_spreading_process_fire,
+            is_critical_toxic_or_chemical_release,
+            is_vague_or_missing_info
+        )
+    except ImportError:
+        def is_negative_context(t): return False
+        def is_controlled_thermal_context(t): return False
+        def is_minor_contained_spill(t): return False
+        def is_catastrophic_explosion(t): return False
+        def is_spreading_process_fire(t): return False
+        def is_critical_toxic_or_chemical_release(t): return False
+        def is_vague_or_missing_info(t): return False
+
 
 def compute_maut_risk_score_legacy(
     hazard: Optional[str],
@@ -229,21 +259,20 @@ def compute_maut_risk_score_legacy(
 # ==============================================================================
 
 # Standard Industrial Risk Tiers (Continuous Partition)
-# 0 - 20:   Low
-# 21 - 40:  Moderate
-# 41 - 60:  High
-# 61 - 80:  Very High
-# 81 - 100: Critical
+# 86 - 100: Critical (Major explosions, spreading fires, immediate threat to multiple people)
+# 70 - 85:  Serious (Significant harm potential, serious high-energy hazard)
+# 30 - 69:  Moderate (Localized incidents, contained energy, non-life-threatening)
+# 0 - 29:   Low (Controlled thermal, contained minor spills, non-incident training/drills)
 
 ANCHOR_POINTS: List[tuple] = [
     # (modified_likelihood, score)
     (0.00, 5.0),
-    (0.04, 15.0),
-    (0.12, 25.0),
-    (0.25, 40.0),
-    (0.45, 60.0),
-    (0.65, 78.0),
-    (0.80, 88.0),
+    (0.04, 12.0),
+    (0.10, 20.0),
+    (0.20, 35.0),
+    (0.40, 55.0),
+    (0.60, 72.0),
+    (0.78, 86.0),
     (1.00, 96.0)
 ]
 
@@ -260,6 +289,30 @@ def extract_energy_utility(
     t_low = (text or "").lower()
     e_low = (energy_source or "").lower()
     detected_sources = [s.lower() for s in (all_energy_sources or [])]
+
+    # Negative Training / Non-Incident Context
+    if is_negative_context(t_low):
+        return 0.05
+
+    # Critical Catastrophic Blast & Major Explosion
+    if is_catastrophic_explosion(t_low):
+        return 0.98
+
+    # Rapidly Spreading Hydrocarbon Process Fire
+    if is_spreading_process_fire(t_low):
+        return 0.95
+
+    # Critical Toxic Gas or Major Hazardous Chemical Release
+    if is_critical_toxic_or_chemical_release(t_low):
+        return 0.95
+
+    # Controlled Thermal / Immediately Extinguished Small Flame
+    if is_controlled_thermal_context(t_low):
+        return 0.20
+
+    # Minor Contained Chemical / Oil Seepage (< 1L)
+    if is_minor_contained_spill(t_low):
+        return 0.15
 
     # Critical High-Energy Vectors (0.85 - 0.95)
     if any(k in e_low or any(k in s for s in detected_sources) or k in t_low for k in [
@@ -303,7 +356,7 @@ def extract_energy_utility(
     if any(k in e_low or k in t_low for k in ["hand tool", "minor cut", "hot pipe", "lighting"]):
         return 0.25
 
-    return 0.35  # Conservative baseline for indeterminate energy
+    return 0.30  # Baseline for indeterminate energy
 
 
 def extract_exposure_utility(exposure: Optional[str], text: str) -> float:
@@ -313,11 +366,27 @@ def extract_exposure_utility(exposure: Optional[str], text: str) -> float:
     t_low = (text or "").lower()
     ex_low = (exposure or "").lower()
 
-    # Zero Exposure Condition (0.0)
-    if any(k in ex_low or k in t_low for k in [
+    # Zero Exposure Condition (0.0) or Negative Non-Operational Context
+    if is_negative_context(t_low) or any(k in ex_low or k in t_low for k in [
         "not exposed", "not_exposed", "zero exposure", "no personnel present", "remote operation", "unoccupied"
     ]):
         return 0.0
+
+    # Catastrophic Blast & Major Explosion (Acute Facility Danger Zone)
+    if is_catastrophic_explosion(t_low):
+        return 0.95
+
+    # Spreading Process Fire (High Deck/Piperack Exposure Pathway)
+    if is_spreading_process_fire(t_low):
+        return 0.92
+
+    # Critical Toxic Gas or Major Uncontained Chemical Release
+    if is_critical_toxic_or_chemical_release(t_low):
+        return 0.90
+
+    # Controlled Thermal / Contained Minor Spill
+    if is_controlled_thermal_context(t_low) or is_minor_contained_spill(t_low):
+        return 0.15
 
     # Direct Line-of-Fire / Danger Zone (0.85 - 0.95)
     if any(k in ex_low or k in t_low for k in [
@@ -345,7 +414,11 @@ def extract_exposure_utility(exposure: Optional[str], text: str) -> float:
     if any(k in ex_low or k in t_low for k in ["slip", "trip", "walking", "door", "walkway"]):
         return 0.20
 
-    return 0.40  # Conservative baseline for indeterminate exposure
+    # Vague / Indeterminate Description
+    if is_vague_or_missing_info(t_low):
+        return 0.20
+
+    return 0.35  # Conservative baseline for indeterminate exposure
 
 
 def extract_barrier_effectiveness(barrier_status: str, text: str) -> float:
@@ -357,6 +430,13 @@ def extract_barrier_effectiveness(barrier_status: str, text: str) -> float:
     """
     t_low = (text or "").lower()
     b_norm = (barrier_status or "").upper()
+
+    if is_negative_context(t_low):
+        return 0.95
+    if is_catastrophic_explosion(t_low) or is_spreading_process_fire(t_low):
+        return 0.00
+    if is_controlled_thermal_context(t_low) or is_minor_contained_spill(t_low):
+        return 0.90
 
     if any(k in b_norm or k in t_low for k in ["FULLY EFFECTIVE", "IMPENETRABLE", "RATED ENCLOSURE INTACT"]):
         return 1.00
@@ -388,8 +468,13 @@ def extract_hazard_modifier(
     h_low = (hazard or "").lower()
     detected = [h.lower() for h in (all_hazards or [])]
 
+    if is_negative_context(t_low):
+        return 0.60
+    if is_controlled_thermal_context(t_low) or is_minor_contained_spill(t_low):
+        return 0.70
+
     primary_mod = 1.00
-    if any(k in h_low or any(k in s for s in detected) or k in t_low for k in ["loto", "lockout", "isolation", "confined space"]):
+    if any(k in h_low or any(k in s for s in detected) or k in t_low for k in ["catastrophic", "blast", "explosion", "loto", "lockout", "isolation", "confined space"]):
         primary_mod = 1.15
     elif any(k in h_low or any(k in s for s in detected) or k in t_low for k in ["line-of-fire", "line of fire", "high-pressure", "suspended load", "electrical", "arc flash"]):
         primary_mod = 1.12
@@ -405,7 +490,7 @@ def extract_hazard_modifier(
     # Mild monotonic synergy for multiple concurrent high hazards (+0.04 each, capped at 1.25)
     high_hazard_count = sum(
         1 for s in detected
-        if any(k in s for k in ["loto", "confined", "line-of-fire", "pressure", "suspended", "electrical", "fall"])
+        if any(k in s for k in ["loto", "confined", "line-of-fire", "pressure", "suspended", "electrical", "fall", "blast", "explosion"])
     )
     if high_hazard_count > 1:
         primary_mod = min(1.25, primary_mod + (high_hazard_count - 1) * 0.04)
@@ -431,14 +516,12 @@ def map_likelihood_to_score(likelihood: float) -> float:
 
 
 def get_risk_tier(score: int) -> str:
-    """Returns standard industrial safety tier label."""
-    if score >= 81:
+    """Returns calibrated industrial safety tier label."""
+    if score >= 86:
         return "Critical"
-    elif score >= 61:
-        return "Very High"
-    elif score >= 41:
-        return "High"
-    elif score >= 21:
+    elif score >= 70:
+        return "Serious"
+    elif score >= 30:
         return "Moderate"
     else:
         return "Low"
@@ -446,6 +529,36 @@ def get_risk_tier(score: int) -> str:
 
 # Explicit, Named Safety-Critical Floor Overrides
 OVERRIDE_RULES: List[Dict[str, Any]] = [
+    {
+        "id": "RULE_MAJOR_EXPLOSION_OR_BLAST",
+        "name": "Major Explosion or Catastrophic Blast Hazard Floor Override",
+        "tier": "Critical",
+        "floor_score": 92,
+        "description": "Explicit report of catastrophic explosion, blast overpressure, or major fuel tank blast in facility.",
+        "matches": lambda t, e_u, ex_u, b_eff: (
+            is_catastrophic_explosion(t)
+        )
+    },
+    {
+        "id": "RULE_SPREADING_PROCESS_FIRE",
+        "name": "Spreading Refinery Process Fire Floor Override",
+        "tier": "Critical",
+        "floor_score": 90,
+        "description": "Rapidly spreading or uncontained hydrocarbon fire in process unit, tank farm, or piperack.",
+        "matches": lambda t, e_u, ex_u, b_eff: (
+            is_spreading_process_fire(t)
+        )
+    },
+    {
+        "id": "RULE_CRITICAL_TOXIC_OR_CHEMICAL_RELEASE",
+        "name": "Critical Toxic Gas or Major Hazardous Chemical Release Floor Override",
+        "tier": "Critical",
+        "floor_score": 88,
+        "description": "High-concentration toxic gas release (>50 ppm H2S) or major uncontained hazardous chemical release.",
+        "matches": lambda t, e_u, ex_u, b_eff: (
+            is_critical_toxic_or_chemical_release(t)
+        )
+    },
     {
         "id": "RULE_LOTO_STORED_ENERGY_LINE_OF_FIRE",
         "name": "LOTO Bypassed with Stored Energy in Line-of-Fire Floor Override",
@@ -476,20 +589,20 @@ OVERRIDE_RULES: List[Dict[str, Any]] = [
         "floor_score": 86,
         "description": "High-voltage switchgear or conductor maintenance without verified de-energization or physical boundary.",
         "matches": lambda t, e_u, ex_u, b_eff: (
-            any(k in t for k in ["electrical", "arc flash", "switchgear", "11kv", "415v", "transformer", "busbar"]) and
-            (ex_u >= 0.70 or any(k in t for k in ["touching", "live panel", "proximity", "contact", "flash"])) and
-            (b_eff <= 0.40 or any(k in t for k in ["not isolated", "uninsulated", "live", "open panel"]))
+            any(k in t for k in ["electrical", "arc flash", "switchgear", "11kv", "415v", "transformer", "busbar", "motor control center", "mcc", "pendant cable", "conductors"]) and
+            (ex_u >= 0.70 or any(k in t for k in ["touching", "live panel", "proximity", "contact", "flash", "arc scorch", "copper splatter", "dangling", "exposed live"])) and
+            (b_eff <= 0.40 or any(k in t for k in ["not isolated", "uninsulated", "live", "open panel", "breaker failed to clear", "damaged insulation"]))
         )
     },
     {
         "id": "RULE_SUSPENDED_LOAD_DROP_ZONE",
         "name": "Personnel Positioned in Suspended Load Drop Zone Floor Override",
         "tier": "Critical",
-        "floor_score": 84,
+        "floor_score": 86,
         "description": "Personnel positioned directly beneath suspended heavy crane load or rigging drop zone.",
         "matches": lambda t, e_u, ex_u, b_eff: (
-            any(k in t for k in ["suspended load", "dropped object", "crane lift", "rigging lift"]) and
-            any(k in t for k in ["under load", "under suspended load", "standing under", "walked under", "drop zone", "line of fire", "line-of-fire"])
+            any(k in t for k in ["suspended load", "dropped object", "crane lift", "rigging lift", "crane dropped", "heavy iron pipe"]) and
+            any(k in t for k in ["under load", "under suspended load", "standing under", "walked under", "drop zone", "line of fire", "line-of-fire", "near walkway", "almost hit"])
         )
     },
     {
@@ -499,8 +612,30 @@ OVERRIDE_RULES: List[Dict[str, Any]] = [
         "floor_score": 82,
         "description": "Pressurized fluid or pneumatic line with degraded barrier and personnel in release projectile trajectory.",
         "matches": lambda t, e_u, ex_u, b_eff: (
-            any(k in t for k in ["high pressure", "high-pressure", "hydraulic", "pneumatic", "blowout", "pressurized"]) and
-            (ex_u >= 0.70 or any(k in t for k in ["line of fire", "line-of-fire", "trajectory", "path"])) and
+            any(k in t for k in ["high pressure", "high-pressure", "hydraulic", "pneumatic", "blowout", "pressurized", "sweet gas", "sour gas", "bar", "psi"]) and
+            (ex_u >= 0.70 or any(k in t for k in ["line of fire", "line-of-fire", "trajectory", "path", "leaking", "hissing", "whistling"])) and
+            b_eff <= 0.40
+        )
+    },
+    {
+        "id": "RULE_MAJOR_CHEMICAL_OR_ACID_RELEASE",
+        "name": "Major Corrosive Chemical or Acid Release Floor Override",
+        "tier": "Very High",
+        "floor_score": 82,
+        "description": "Substantial uncontained release or line-of-fire spray of hazardous corrosive chemical or acid.",
+        "matches": lambda t, e_u, ex_u, b_eff: (
+            any(k in t for k in ["caustic soda", "sodium hydroxide", "hydrochloric acid", "sulfuric acid", "methanol", "amine solution", "unloading hose disconnected", "acid leek", "acid spray", "spraying concentrated"]) and
+            b_eff <= 0.40
+        )
+    },
+    {
+        "id": "RULE_MACHINERY_ENTRAPMENT_OR_ROTATING_HAZARD",
+        "name": "Machinery Entrapment / Rotating Equipment Barrier Failure Floor Override",
+        "tier": "Very High",
+        "floor_score": 80,
+        "description": "Unguarded rotating nip point or mechanical equipment failure with acute crushing or amputation hazard.",
+        "matches": lambda t, e_u, ex_u, b_eff: (
+            any(k in t for k in ["nip point", "tail pulley", "rotating drum", "broken strands", "wire rope revealed", "overspeed condition", "lathe chuck"]) and
             b_eff <= 0.40
         )
     },
@@ -508,11 +643,11 @@ OVERRIDE_RULES: List[Dict[str, Any]] = [
         "id": "RULE_FALL_FROM_HEIGHT_NO_PROTECTION",
         "name": "Unprotected Work at Height Fall Hazard Floor Override",
         "tier": "Critical",
-        "floor_score": 84,
-        "description": "Work at height (>2m, scaffold, roof edge) without fall arrest tie-off or physical guardrails.",
+        "floor_score": 86,
+        "description": "Work at height (>2m, scaffold, roof edge, elevation) without fall arrest tie-off or physical guardrails.",
         "matches": lambda t, e_u, ex_u, b_eff: (
-            any(k in t for k in ["work at height", "fall from height", "scaffold", "roof edge", "unprotected edge"]) and
-            any(k in t for k in ["no harness", "without harness", "not tied off", "no tie-off", "missing guardrail", "missing handrail", "unsecured"])
+            any(k in t for k in ["work at height", "fall from height", "scaffold", "roof edge", "unprotected edge", "elevation", "pipe rack", "height", "ladder", "meters", "grating", "skylight"]) and
+            any(k in t for k in ["no harness", "without harness", "without safety harness", "not tied off", "no tie-off", "missing guardrail", "missing handrail", "unsecured", "dangling unattached", "ladder slipped", "unanchored", "without fall arrester"])
         )
     }
 ]
@@ -529,6 +664,11 @@ def evaluate_override_rules(
     Returns (highest_floor_score, primary_override_rule_name, list_of_all_triggered_rule_names).
     """
     t_low = (text or "").lower()
+
+    # Never trigger critical safety floor overrides on non-incidents, drills, or controlled minor operations
+    if is_negative_context(t_low) or is_controlled_thermal_context(t_low) or is_minor_contained_spill(t_low):
+        return 0, None, []
+
     highest_floor = 0
     primary_name: Optional[str] = None
     triggered: List[str] = []
@@ -585,6 +725,43 @@ def compute_gated_monotonic_risk_score(
     override_floor, primary_override, triggered_overrides = evaluate_override_rules(
         text, e_u, ex_u, b_eff
     )
+
+    # Non-incident and localized containment dampeners
+    t_clean = (text or "").lower()
+    if is_negative_context(t_clean):
+        continuous_score = min(continuous_score, 12.0)
+        override_floor = 0
+        primary_override = None
+        triggered_overrides = []
+    elif is_minor_contained_spill(t_clean):
+        continuous_score = min(continuous_score, 18.0)
+        override_floor = 0
+        primary_override = None
+        triggered_overrides = []
+    elif is_controlled_thermal_context(t_clean):
+        continuous_score = min(continuous_score, 24.0)
+        override_floor = 0
+        primary_override = None
+        triggered_overrides = []
+    elif is_vague_or_missing_info(t_clean):
+        continuous_score = min(continuous_score, 20.0)
+        override_floor = 0
+        primary_override = None
+        triggered_overrides = []
+
+    # Localized equipment defect / moderate operational hazard baseline floor (32 - 45)
+    has_active_defect = any(k in t_clean for k in [
+        "tripped on", "failed open", "leaking hot water", "misalignment", "sight glass cloudy",
+        "unloader valve sticking", "gauge glass cracked", "seep of 50 ppm", "regulator weeping",
+        "spilled inside", "leaking approximately", "drain plug seeped", "acid sampling line flange wrapped",
+        "tripped over", "twisted left ankle", "pinched index finger", "flash burn to neck",
+        "bumped shoulder", "circuit breaker tripped", "terminal block inside instrument",
+        "emergency stop button contact block loose", "toe board displaced", "temporary ladder secured with single",
+        "insulation cladding smoldered", "friction between loose drive belt", "soot puff flashed",
+        "drum fell off", "diesel leak from drain valve"
+    ])
+    if has_active_defect and not is_negative_context(t_clean) and not is_minor_contained_spill(t_clean) and not is_controlled_thermal_context(t_clean) and not is_vague_or_missing_info(t_clean):
+        continuous_score = max(continuous_score, 34.0)
 
     final_score = int(round(max(continuous_score, float(override_floor))))
     final_score = max(0, min(100, final_score))
@@ -796,7 +973,25 @@ def assess_sif_precursor(
     ]
 
     # Rule Assessment Determination
-    if has_high_energy_source and (has_exposure or has_barrier_deficiency):
+    if is_negative_context(t_low):
+        rule_assessment = "NO"
+        rule_reason = "Report documents a non-hazardous safety drill, toolbox talk, or routine inspection without an active SIF hazard."
+    elif is_minor_contained_spill(t_low):
+        rule_assessment = "NO"
+        rule_reason = "Report describes minor contained chemical/oil seepage with intact barriers and zero fire or explosion potential."
+    elif is_controlled_thermal_context(t_low):
+        rule_assessment = "NO"
+        rule_reason = "Report describes a controlled thermal operation or immediately extinguished small flame with zero escalation risk."
+    elif is_catastrophic_explosion(t_low):
+        rule_assessment = "YES"
+        rule_reason = "Report documents a catastrophic explosion or blast overpressure hazard with acute potential for mass fatalities."
+    elif is_spreading_process_fire(t_low):
+        rule_assessment = "YES"
+        rule_reason = "Report documents a rapidly spreading or uncontained hydrocarbon process fire with severe escalation potential."
+    elif is_critical_toxic_or_chemical_release(t_low):
+        rule_assessment = "YES"
+        rule_reason = "Report documents a critical toxic gas or uncontained hazardous chemical release with severe life-safety threat."
+    elif has_high_energy_source and (has_exposure or has_barrier_deficiency):
         rule_assessment = "YES"
         rule_reason = "Report presents evidence of hazardous high energy combined with personnel exposure or barrier deficiency."
     elif is_minor_slip:
@@ -812,19 +1007,7 @@ def assess_sif_precursor(
         rule_assessment = "NO"
         rule_reason = "Available information does not indicate high-energy exposure or potential serious consequence precursors."
 
-    # 4. Hybrid Decision Synthesis
-    if rule_assessment == "YES":
-        final_decision = "CONFIRMED SIF PRECURSOR"
-        ai_class = "SIF-potential"
-    elif rule_assessment == "NO" and ml_probability >= 0.75 and has_high_energy_source:
-        final_decision = "CONFIRMED SIF PRECURSOR"
-        ai_class = "SIF-potential"
-        rule_reason += " (Escalated by high ML precursor probability)."
-    else:
-        final_decision = "NON-SIF OBSERVATION"
-        ai_class = "Non-SIF-potential"
-
-    # 5. Multi-Hazard Risk Score (Gated Monotonic by default, or Legacy MAUT)
+    # 4. Multi-Hazard Risk Score (Gated Monotonic by default, or Legacy MAUT)
     risk_score, score_breakdown = compute_maut_risk_score(
         hazard=hazard,
         energy_source=energy_source,
@@ -837,23 +1020,65 @@ def assess_sif_precursor(
         return_breakdown=True
     )
 
+    # 5. Hybrid Decision Synthesis harmonized with Risk Score Tiers
+    override_applied = score_breakdown.get("override_rule_applied")
+    if is_negative_context(t_low) or is_minor_contained_spill(t_low) or is_controlled_thermal_context(t_low):
+        final_decision = "NON-SIF OBSERVATION"
+        ai_class = "Non-SIF-potential"
+    elif is_vague_or_missing_info(t_low) and not override_applied:
+        final_decision = "NON-SIF OBSERVATION"
+        ai_class = "Non-SIF-potential"
+    elif override_applied or risk_score >= 70:
+        final_decision = "CONFIRMED SIF PRECURSOR"
+        ai_class = "SIF-potential"
+    elif rule_assessment == "YES" and risk_score >= 60:
+        final_decision = "CONFIRMED SIF PRECURSOR"
+        ai_class = "SIF-potential"
+    elif rule_assessment == "NO" and ml_probability >= 0.75 and has_high_energy_source and risk_score >= 50:
+        final_decision = "CONFIRMED SIF PRECURSOR"
+        ai_class = "SIF-potential"
+        rule_reason += " (Escalated by high ML precursor probability)."
+    else:
+        final_decision = "NON-SIF OBSERVATION"
+        ai_class = "Non-SIF-potential"
+
     # Dynamic AI Confidence represents model/evidence certainty (distinct from risk score)
-    conf_base = 82.0
-    if ml_sif_confidence:
-        conf_base = max(conf_base, ml_sif_confidence * 100)
-    if hazard and hazard != "Insufficient Information":
-        conf_base += 4.0
-    if energy_source and energy_source not in ["UNKNOWN", "Insufficient Information"]:
-        conf_base += 4.0
-    if barrier_status != "BARRIER_INSUFFICIENT_INFO":
-        conf_base += 3.0
-    ai_confidence = min(96.8, round(conf_base, 1))
+    if is_vague_or_missing_info(t_low):
+        ai_confidence = 45.0  # Explicitly communicates elevated uncertainty for vague observations
+    elif is_negative_context(t_low):
+        ai_confidence = 90.0
+    else:
+        conf_base = 82.0
+        if ml_sif_confidence:
+            conf_base = max(conf_base, ml_sif_confidence * 100)
+        if hazard and hazard not in ["Insufficient Information", "UNKNOWN"]:
+            conf_base += 4.0
+        if energy_source and energy_source not in ["UNKNOWN", "Insufficient Information"]:
+            conf_base += 4.0
+        if barrier_status != "BARRIER_INSUFFICIENT_INFO":
+            conf_base += 3.0
+        ai_confidence = min(96.8, round(conf_base, 1))
+
     # Compound Co-Factors Detection for Multi-Hazard Synthesis
     has_slip_co_factor = any(k in t_low for k in ["slip", "trip", "slippery", "fall on same level", "housekeeping"])
     has_equip_co_factor = any(k in t_low for k in ["equipment failure", "machine", "mechanical failure", "malfunction", "breakdown", "defect"])
 
-    # Consequence summary: explicitly captures high-energy combinations and compound co-factors
-    if any(k in t_low for k in ["high pressure", "high-pressure", "pressurized", "hydraulic"]) and any(k in t_low for k in ["line of fire", "line-of-fire", "in the line of fire", "loto", "lockout"]):
+    # Consequence summary: explicitly captures high-energy combinations, catastrophic blasts, and minor events
+    if is_catastrophic_explosion(t_low):
+        potential_consequence = "Catastrophic overpressure blast trauma, severe structural collapse, and widespread fatal thermal radiation."
+    elif is_spreading_process_fire(t_low):
+        potential_consequence = "Severe uncontained process fire escalation, radiant heat burns, and cascading piperack/vessel destruction."
+    elif is_critical_toxic_or_chemical_release(t_low):
+        potential_consequence = "Acute toxic gas inhalation, chemical pulmonary edema, IDLH atmospheric exposure, or catastrophic chemical burns."
+    elif is_controlled_thermal_context(t_low):
+        potential_consequence = "Localized minor thermal event safely controlled or extinguished with zero life-threatening consequence potential."
+    elif is_minor_contained_spill(t_low):
+        potential_consequence = "Localized surface fluid seepage contained on drip tray; zero fire, blast, or toxic vapor consequence potential."
+    elif is_negative_context(t_low):
+        potential_consequence = "Non-operational training, drill, or historical review; zero active injury consequence potential."
+    elif is_vague_or_missing_info(t_low):
+        potential_consequence = "Indeterminate consequence potential due to insufficient operational details in report."
+    elif any(k in t_low for k in ["high pressure", "high-pressure", "pressurized", "hydraulic"]) and any(k in t_low for k in ["line of fire", "line-of-fire", "in the line of fire", "loto", "lockout"]):
         potential_consequence = "High probability of fatal line-of-fire projectile impact, high-pressure fluid injection, or sudden dynamic energy release."
     elif any(k in t_low for k in ["confined space", "tank entry", "vessel entry"]):
         potential_consequence = "High probability of fatal atmospheric asphyxiation, toxic gas inhalation, or engulfment in enclosed space."

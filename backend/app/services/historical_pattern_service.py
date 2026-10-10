@@ -24,6 +24,8 @@ from ..models.safety_report import SafetyReport
 from ..models.ai_analysis import AIAnalysis
 from ..models.weak_signal import WeakSignal
 from ..ai_services.similarity_service import compute_similarity
+from ..ai_services.signal_correlation import evaluate_report_pair_or_group
+
 
 
 # ==============================================================================
@@ -171,13 +173,30 @@ def detect_and_update_weak_signals(
     current_barrier = raw_nlp_result.get("barrier_information") or "BARRIER_INSUFFICIENT_INFO"
     current_activity = raw_nlp_result.get("identified_action") or ""
 
+    cur_sev = getattr(current_report, "observed_severity", None)
+    if not cur_sev and current_report.ai_analysis:
+        cur_sev = getattr(current_report.ai_analysis, "risk_level", None)
+    cur_dict = {
+        "id": current_report.id,
+        "report_reference": current_report.report_reference,
+        "description": current_text,
+        "location": current_report.location,
+        "report_date": str(current_report.report_date)[:10] if current_report.report_date else None,
+        "report_type": current_report.report_type,
+        "identified_hazard": current_hazard,
+        "observed_severity": cur_sev or "Moderate"
+    }
+
+    # Evaluate if current report narrative itself contains an intra-report compound precursor (e.g. gas leak + fire explosion)
+    intra_eval = evaluate_report_pair_or_group([cur_dict])
+
     # 1. Retrieve prior safety reports for this organization (excluding current report)
     prior_reports = db.query(SafetyReport).filter(
         SafetyReport.organization_id == org_id,
         SafetyReport.id != current_report.id
     ).order_by(SafetyReport.id.desc()).all()
 
-    if not prior_reports:
+    if not prior_reports and not intra_eval.get("cluster_detected"):
         return {
             "weak_signal_detected": False,
             "weak_signal_id": None,
@@ -199,16 +218,23 @@ def detect_and_update_weak_signals(
         prev_family = extract_hazard_family(prev_hazard, prev_text)
 
         # Quick candidate inclusion criteria:
-        # Same unit, same hazard family, common energy keyword, or basic lexical token overlap
+        # Same unit, same hazard family, cross-hazard interaction potential, or shared keywords/equipment
+        is_cross_hazard = (
+            (current_family == "GAS_LEAKAGE" and prev_family in ["HOT_WORK_FIRE", "ELECTRICAL_HAZARD", "IGNITION_SOURCE"]) or
+            (prev_family == "GAS_LEAKAGE" and current_family in ["HOT_WORK_FIRE", "ELECTRICAL_HAZARD", "IGNITION_SOURCE"]) or
+            (current_family == "MACHINE_GUARDING") or
+            (prev_family == "MACHINE_GUARDING")
+        )
         is_candidate = (
             norm_current_unit == norm_prev_unit or
             (current_family == prev_family and current_family != "OPERATIONAL_DEVIATION") or
+            is_cross_hazard or
             any(w in prev_text.lower() for w in current_text.lower().split() if len(w) > 4)
         )
         if is_candidate:
             candidate_reports.append(prev)
 
-    if not candidate_reports:
+    if not candidate_reports and not intra_eval.get("cluster_detected"):
         return {
             "weak_signal_detected": False,
             "weak_signal_id": None,
@@ -224,8 +250,23 @@ def detect_and_update_weak_signals(
     # 3. Transparent Multi-Dimensional Evidence Scoring
     matching_reports_info: List[Dict[str, Any]] = []
     matching_report_models: List[SafetyReport] = []
+    matched_pair_evals: Dict[int, Dict[str, Any]] = {}
     evidence_scores: List[float] = []
     jaccard_scores: List[float] = []
+
+    cur_sev = getattr(current_report, "observed_severity", None)
+    if not cur_sev and current_report.ai_analysis:
+        cur_sev = getattr(current_report.ai_analysis, "risk_level", None)
+    cur_dict = {
+        "id": current_report.id,
+        "report_reference": current_report.report_reference,
+        "description": current_text,
+        "location": current_report.location,
+        "report_date": str(current_report.report_date)[:10] if current_report.report_date else None,
+        "report_type": current_report.report_type,
+        "identified_hazard": current_hazard,
+        "observed_severity": cur_sev or "Moderate"
+    }
 
     for prev in candidate_reports:
         prev_text = f"{prev.description} {prev.additional_context or ''}".strip()
@@ -235,6 +276,24 @@ def detect_and_update_weak_signals(
         prev_energy = (prev.ai_analysis.energy_source if prev.ai_analysis else "") or ""
         prev_barrier = (prev.ai_analysis.barrier_information if prev.ai_analysis else "") or ""
         prev_activity = (prev.ai_analysis.identified_action if prev.ai_analysis else "") or ""
+
+        prev_sev = getattr(prev, "observed_severity", None)
+        if not prev_sev and prev.ai_analysis:
+            prev_sev = getattr(prev.ai_analysis, "risk_level", None)
+
+        prev_dict = {
+            "id": prev.id,
+            "report_reference": prev.report_reference,
+            "description": prev_text,
+            "location": prev.location,
+            "report_date": str(prev.report_date)[:10] if prev.report_date else None,
+            "report_type": prev.report_type,
+            "identified_hazard": prev_hazard,
+            "observed_severity": prev_sev or "Moderate"
+        }
+
+        # Multi-factor correlation evaluation using Signal Correlation Engine
+        pair_eval = evaluate_report_pair_or_group([cur_dict, prev_dict])
 
         # Dimension A: Narrative Similarity — Jaccard Token Similarity (0.0 to 1.0)
         jaccard_sim = compute_similarity(current_text, prev_text)
@@ -302,9 +361,6 @@ def detect_and_update_weak_signals(
             (temporal_score * WEIGHT_TEMPORAL_RECURRENCE)
         )
 
-        # A weak signal represents recurrence of one meaningful safety issue.
-        # Do not merge different hazards merely because their words or locations
-        # overlap (for example, a gas leak and an ignition-source observation).
         shared_safety_family = (
             current_family == prev_family and current_family != "OPERATIONAL_DEVIATION"
         )
@@ -315,18 +371,21 @@ def detect_and_update_weak_signals(
             activity_score > 0,
             temporal_score >= 0.5,
         ])
-        is_match = (
-            shared_safety_family and
-            temporal_score >= 0.5 and
-            corroborating_dimensions >= MIN_SAFETY_EVIDENCE_DIMENSIONS and
-            composite_evidence >= PATTERN_EVIDENCE_THRESHOLD
-        )
+
+        # Core Weak Signal Correlation Gate:
+        # A candidate is a match if:
+        # Cross-hazard synergy detection: A weak signal / compound cluster is ONLY formed
+        # when distinct hazards interact to create an escalation pathway (e.g. gas leak + fire/ignition -> blast).
+        # Repeated occurrences of the same single hazard (e.g. repeated slip/trip or repeated housekeeping) do NOT form compound clusters.
+        if pair_eval.get("cluster_detected"):
+            is_match = True
+            matched_pair_evals[prev.id] = pair_eval
+        else:
+            is_match = False
+
         reasons = []
-        if is_match:
-            reasons.append(
-                f"Recurring {current_family.replace('_', ' ').title()} with "
-                f"{corroborating_dimensions} corroborating safety evidence dimensions"
-            )
+        if is_match and prev.id in matched_pair_evals:
+            reasons.append(matched_pair_evals[prev.id].get("reason", f"Correlated {pair_eval.get('relationship')}"))
 
         if is_match:
             matching_report_models.append(prev)
@@ -350,35 +409,167 @@ def detect_and_update_weak_signals(
                 "match_reason": "; ".join(reasons)
             })
 
-    # 4. Strict Recurrence Gate: Total count >= 2 records required (Current + >= 1 Prior)
-    if not matching_report_models:
+    # 4. Strict Compound Precursor Gate: Must have verified cross-hazard interaction
+    if not matching_report_models or not matched_pair_evals:
+        # Check if current report itself contains an intra-report compound hazard interaction (e.g. gas leak + fire explosion)
+        if intra_eval.get("cluster_detected"):
+            base_risk_score = intra_eval.get("correlation_score", 95)
+            risk_level = intra_eval.get("risk_classification", "Critical")
+            signal_title = intra_eval.get("pattern_name") or intra_eval.get("relationship", "Gas Leak + Fire Explosion Precursor")
+            escalation_path = intra_eval.get("potential_consequence", "Catastrophic Vapor Cloud Explosion (VCE) & Severe Blast Overpressure Event")
+            detection_reason = intra_eval.get("reason", "Flammable gas release and fire explosion co-occur to form a vapor cloud explosion precursor.")
+            recommended_action = intra_eval.get("recommended_preventive_actions", intra_eval.get("recommended_action", "Immediately shut down process and isolate ignition sources."))
+            
+            all_related_ids = [current_report.id]
+            recurrence_count = 1
+            
+            existing_signal = db.query(WeakSignal).filter(
+                WeakSignal.organization_id == org_id,
+                WeakSignal.unit == norm_current_unit
+            ).first()
+            
+            if existing_signal:
+                existing_signal.title = signal_title
+                existing_signal.category = "Gas Containment & Fire Explosion Prevention"
+                existing_signal.last_detected_at = datetime.utcnow()
+                existing_signal.current_report_id = current_report.id
+                existing_signal.detection_reason = detection_reason
+                existing_signal.escalation_path = escalation_path
+                existing_signal.risk_score = base_risk_score
+                existing_signal.risk_level = risk_level
+                curr_ids = list(existing_signal.related_report_ids or [])
+                if current_report.id not in curr_ids:
+                    curr_ids.append(current_report.id)
+                existing_signal.related_report_ids = curr_ids
+                if current_report not in existing_signal.safety_reports:
+                    existing_signal.safety_reports.append(current_report)
+                db.commit()
+                db.refresh(existing_signal)
+                active_signal = existing_signal
+            else:
+                signal_count = db.query(WeakSignal).filter(WeakSignal.organization_id == org_id).count()
+                new_signal_id = f"WS-{signal_count + 1:03d}"
+                active_signal = WeakSignal(
+                    signal_id=new_signal_id,
+                    organization_id=org_id,
+                    signal_type="COMPOUND_HAZARD",
+                    title=signal_title,
+                    category="Gas Containment & Fire Explosion Prevention",
+                    description=f"Compound hazard detected in {current_unit}: {escalation_path}",
+                    detected_hazard=current_family,
+                    location=current_unit,
+                    unit=norm_current_unit,
+                    activity=current_activity or "Routine Operations",
+                    energy_vector=current_energy,
+                    barrier_issue=current_barrier,
+                    recurrence_count=1,
+                    risk_score=base_risk_score,
+                    risk_level=risk_level,
+                    first_detected_at=datetime.utcnow(),
+                    last_detected_at=datetime.utcnow(),
+                    current_report_id=current_report.id,
+                    related_report_ids=all_related_ids,
+                    detection_reason=detection_reason,
+                    escalation_path=escalation_path,
+                    recommended_action=recommended_action,
+                    status="Under Review"
+                )
+                db.add(active_signal)
+                db.flush()
+                active_signal.safety_reports.append(current_report)
+                db.commit()
+                db.refresh(active_signal)
+
+            current_report_summary = {
+                "report_id": current_report.id,
+                "report_reference": current_report.report_reference,
+                "report_type": current_report.report_type,
+                "location": current_report.location,
+                "report_date": current_report.report_date,
+                "short_description": current_report.description[:100],
+                "similarity_score": 1.0,
+                "similarity_method": "Active Incident Trigger",
+                "match_reason": "Current active safety report triggering surveillance correlation"
+            }
+            structured_sig = {
+                "id": active_signal.id,
+                "signal_id": active_signal.signal_id,
+                "title": active_signal.title,
+                "category": active_signal.category,
+                "cluster_detected": True,
+                "relationship": active_signal.title,
+                "potential_consequence": active_signal.escalation_path,
+                "combined_risk": active_signal.risk_level.upper(),
+                "correlation_score": active_signal.risk_score,
+                "risk_score": active_signal.risk_score,
+                "risk_level": active_signal.risk_level,
+                "reason": active_signal.detection_reason,
+                "recommended_action": active_signal.recommended_action,
+                "first_detected_date": active_signal.first_detected_at.strftime("%Y-%m-%d"),
+                "source": "Automated Multi-Record Surveillance",
+                "potential_sif_precursor": active_signal.escalation_path,
+                "why_identified": active_signal.detection_reason,
+                "energy_source": active_signal.energy_vector,
+                "barrier_status": active_signal.barrier_issue,
+                "review_status": active_signal.status,
+                "reviewer_notes": active_signal.reviewer_notes or "Under review by Operational Safety Team.",
+                "recurrence_count": active_signal.recurrence_count,
+                "source_reports": [{
+                    "report_id": current_report.report_reference,
+                    "report_type": current_report.report_type,
+                    "date_submitted": current_report.report_date,
+                    "short_description": current_report.description,
+                    "unit": current_report.location,
+                    "excerpt": current_report.description
+                }],
+                "signals": [{
+                    "signal_num": 1,
+                    "report_id": current_report.report_reference,
+                    "description": current_report.description,
+                    "individual_risk": "CRITICAL",
+                    "location": current_report.location,
+                    "date": str(current_report.report_date)
+                }],
+                "progression_steps": [
+                    {"step": "Compound Precursor", "trend": "Increasing", "status": f"Compound cross-hazard logged in {current_unit}"},
+                    {"step": "Precursor Escalation", "trend": "Stable", "status": active_signal.escalation_path}
+                ]
+            }
+            return {
+                "weak_signal_detected": True,
+                "weak_signal_id": active_signal.signal_id,
+                "weak_signal_title": active_signal.title,
+                "weak_signal_reason": active_signal.detection_reason,
+                "escalation_path": active_signal.escalation_path,
+                "related_reports": [current_report_summary],
+                "weak_signals": [structured_sig]
+            }
+
         return {
             "weak_signal_detected": False,
             "weak_signal_id": None,
             "weak_signal_title": None,
-            "weak_signal_reason": "No emerging weak signals detected.",
-            "historical_comparison": "Historical comparison unavailable — insufficient historical data.",
+            "weak_signal_reason": "No emerging compound cross-hazard precursors detected. Isolated or repeated single-hazard observations do not form compound escalation clusters.",
+            "historical_comparison": "Historical comparison complete — no cross-hazard synergy identified.",
             "escalation_path": None,
             "related_reports": [],
             "weak_signals": []
         }
 
-
-    # Recurring pattern detected!
+    # Cross-hazard compound cluster detected!
     recurrence_count = 1 + len(matching_report_models)
-    escalation_path = generate_potential_escalation_path(current_family, current_hazard, current_unit)
-    signal_title = build_weak_signal_title(current_family, current_hazard, current_unit)
-    
+    all_related_ids = [m.id for m in matching_report_models] + [current_report.id]
+    best_pe = max(matched_pair_evals.values(), key=lambda x: x.get("correlation_score", 0))
+    base_risk_score = best_pe.get("correlation_score", 85)
+    risk_level = best_pe.get("risk_classification", "High")
+    signal_title = best_pe.get("pattern_name") or best_pe.get("relationship", "Compound Hazard Precursor")
+    escalation_path = best_pe.get("potential_consequence", "Catastrophic cross-hazard escalation")
+    detection_reason = best_pe.get("reason", "Cross-hazard interaction detected between disparate observations.")
+    recommended_action = best_pe.get("recommended_preventive_actions", best_pe.get("recommended_action", "Inspect and isolate interacting hazards immediately."))
+
     avg_jaccard = round(sum(jaccard_scores) / len(jaccard_scores), 4) if jaccard_scores else 0.0
     max_jaccard = round(max(jaccard_scores), 4) if jaccard_scores else 0.0
     avg_evidence = round(sum(evidence_scores) / len(evidence_scores), 4) if evidence_scores else 0.5
-
-    detection_reason = (
-        f"{recurrence_count} related observations with similar {current_family.replace('_', ' ').lower()} "
-        f"conditions were found in {current_unit} within the configured analysis window "
-        f"({current_report.report_reference} + {len(matching_report_models)} historical reports: "
-        f"{', '.join([r.report_reference for r in matching_report_models[:3]])})."
-    )
 
     # Structured Evidence Artifacts
     similarity_evidence = {
@@ -400,19 +591,18 @@ def detect_and_update_weak_signals(
         "supporting_dates": [str(m.report_date)[:10] for m in matching_report_models] + [str(current_report.report_date)[:10]]
     }
 
-    # 5. Duplicate Weak Signal Prevention: Look for existing matching WeakSignal in DB
+    # 6. Duplicate Weak Signal Prevention: Look for existing matching WeakSignal in DB
     existing_signal = db.query(WeakSignal).filter(
         WeakSignal.organization_id == org_id,
         WeakSignal.detected_hazard == current_family,
         WeakSignal.unit == norm_current_unit
     ).first()
 
-    all_related_ids = [r.id for r in matching_report_models] + [current_report.id]
-    base_risk_score = 82 if recurrence_count == 2 else min(96, 82 + (recurrence_count - 2) * 5)
-    risk_level = "High" if base_risk_score >= 90 else "Medium"
 
     if existing_signal:
         # UPDATE existing weak signal (prevent duplicate WS-001, WS-002)
+        existing_signal.title = signal_title
+        existing_signal.category = best_pe.get("category", "Gas Containment & Fire Explosion Prevention")
         existing_signal.recurrence_count = max(existing_signal.recurrence_count + 1, recurrence_count)
         existing_signal.last_detected_at = datetime.utcnow()
         existing_signal.current_report_id = current_report.id
@@ -450,10 +640,10 @@ def detect_and_update_weak_signals(
         active_signal = WeakSignal(
             signal_id=new_signal_id,
             organization_id=org_id,
-            signal_type="RECURRING_HAZARD",
+            signal_type="COMPOUND_HAZARD",
             title=signal_title,
-            category=current_family.replace("_", " ").title(),
-            description=f"Automated multi-record surveillance detected recurring {current_family.replace('_', ' ').lower()} conditions in {current_unit}.",
+            category=best_pe.get("category", "Process Safety Escalation"),
+            description=f"Cross-hazard interaction detected in {current_unit}: {escalation_path}",
             detected_hazard=current_family,
             location=current_unit,
             unit=norm_current_unit,
@@ -469,7 +659,7 @@ def detect_and_update_weak_signals(
             related_report_ids=all_related_ids,
             detection_reason=detection_reason,
             escalation_path=escalation_path,
-            recommended_action=f"Inspect and remediate recurring {current_hazard.lower()} conditions across {current_unit}; verify physical controls.",
+            recommended_action=recommended_action,
             similarity_evidence=similarity_evidence,
             spatial_evidence=spatial_evidence,
             temporal_evidence=temporal_evidence,
@@ -513,7 +703,7 @@ def detect_and_update_weak_signals(
         "title": active_signal.title,
         "category": active_signal.category,
         "cluster_detected": True,
-        "relationship": f"Recurring {active_signal.category} ({current_unit})",
+        "relationship": active_signal.title,
         "potential_consequence": active_signal.escalation_path,
         "combined_risk": active_signal.risk_level.upper(),
         "correlation_score": active_signal.risk_score,
