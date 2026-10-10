@@ -451,26 +451,6 @@ export default function IncidentLocationModal({
                   <span>Interactive Map</span>
                 </div>
               </div>
-
-              {/* Quick Sector Selector Pills */}
-              <div className="flex items-center gap-1 overflow-x-auto pb-0.5 custom-scrollbar pointer-events-auto">
-                {[
-                  { id: 'Unit 1', label: 'Unit 1 (CDU)' },
-                  { id: 'Unit 2', label: 'Unit 2 (FCC)' },
-                  { id: 'Unit 3', label: 'Unit 3 (Hydro)' },
-                  { id: 'Unit 4', label: 'Unit 4 (Flare)' }
-                ].map(sector => (
-                  <button
-                    key={sector.id}
-                    type="button"
-                    onClick={() => handleSelectSector(sector.id)}
-                    className="px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-slate-200 hover:border-blue-400 text-slate-700 hover:text-blue-700 font-mono font-bold text-[9px] whitespace-nowrap shadow-xs cursor-pointer active:scale-95 transition-all"
-                  >
-                    {sector.label}
-                  </button>
-                ))}
-              </div>
-
             </div>
 
             {/* Leaflet Map Div */}
