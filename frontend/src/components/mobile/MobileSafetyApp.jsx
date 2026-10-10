@@ -192,6 +192,12 @@ const DEFAULT_USER_INCIDENTS = [
     life_saving_rule: 'Bypass of Safety Controls & Hot Work',
     barrier_status: 'CRITICAL BARRIER FAILED / MISSING',
     recommended_action: 'Depressurize header, cordon 50m exclusion boundary, verify LOTO and dispatch emergency mechanical response.',
+    recommended_controls: [
+      'Isolate upstream supply valve and depressurize affected line segment.',
+      'Evacuate area and perform continuous atmospheric gas testing (0% LEL).',
+      'Inspect flange gasket, valve seals, and fittings for degradation.',
+      'Establish safety exclusion perimeter until re-pressurization tests pass.'
+    ],
     reasoning: 'High-pressure flammable gas release in vicinity of ignition sources constitutes an unmitigated Life-Threatening SIF Precursor.',
     assigned_department: 'MECHANICAL',
     assigned_department_label: 'Mechanical & Piping',
@@ -225,6 +231,12 @@ const DEFAULT_USER_INCIDENTS = [
     life_saving_rule: 'Working at Height',
     barrier_status: 'BARRIER DEGRADED / INCOMPLETE',
     recommended_action: 'Red-tag scaffolding immediately, stop work at height, install certified toe-boards and secondary tool lanyards.',
+    recommended_controls: [
+      'Ensure certified 100% tie-off with inspected harness and lanyard.',
+      'Install top-rail, mid-rail, and toe-board fall protection barriers.',
+      'Red-tag scaffold or ladder until certified inspection sign-off.',
+      'Clear walkway of trip hazards and verify secure planking.'
+    ],
     reasoning: 'Fall from 18m or dropped object impact from this elevation has lethal energy vector with direct SIF potential.',
     assigned_department: 'SAFETY',
     assigned_department_label: 'Safety Inspection Team',
@@ -258,6 +270,12 @@ const DEFAULT_USER_INCIDENTS = [
     life_saving_rule: 'Energy Isolation & Walkway Integrity',
     barrier_status: 'BARRIER TEMPORARILY COMPROMISED',
     recommended_action: 'Re-route cabling overhead through cable tray and install high-visibility heavy duty ramp protectors.',
+    recommended_controls: [
+      'De-energize electrical circuit and perform Lockout/Tagout (LOTO).',
+      'Verify zero voltage using a calibrated test instrument before contact.',
+      'Inspect enclosure, insulation, and conductors for thermal damage.',
+      'Mandate qualified electrical PPE per NFPA 70E standards.'
+    ],
     reasoning: 'Low kinetic energy trip incident without high-voltage arc hazard. Classified as controlled non-SIF operational observation.',
     assigned_department: 'ELECTRICAL',
     assigned_department_label: 'Electrical Maintenance',
@@ -1067,7 +1085,10 @@ export default function MobileSafetyApp() {
         energy_source: energyVector,
         life_saving_rule: lifeSavingRule,
         barrier_status: barrierStatus,
-        recommended_action: recommendedAction,
+        recommended_action: details.recommendedAction || recommendedAction,
+        recommended_controls: (backendResult && backendResult.recommended_controls && Array.isArray(backendResult.recommended_controls) && backendResult.recommended_controls.length > 0)
+          ? backendResult.recommended_controls
+          : getDynamicRecommendations(humanCategoryLabel, activeText),
         reasoning: reasoning,
         assigned_department: details.dept,
         assigned_department_label: details.deptLabel,
@@ -2738,25 +2759,66 @@ export default function MobileSafetyApp() {
                       <p className="font-bold text-slate-800">{aiAnalysisModalData.life_saving_rule}</p>
                     </div>
 
-                    {/* AI Recommended Remediation */}
-                    <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200 space-y-1">
-                      <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-blue-600" /> Recommended Corrective Action
-                      </span>
-                      <p className="font-semibold text-blue-950 leading-relaxed">{aiAnalysisModalData.recommended_action}</p>
+                    {/* AI Precursor Reasoning & Barrier Status */}
+                    {(aiAnalysisModalData.reasoning || aiAnalysisModalData.barrier_status) && (
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-indigo-500" /> AI Precursor Reasoning
+                          </span>
+                          {aiAnalysisModalData.barrier_status && (
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full font-mono ${
+                              aiAnalysisModalData.is_sif ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                            }`}>
+                              {aiAnalysisModalData.barrier_status}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-medium text-slate-700 leading-relaxed">
+                          {aiAnalysisModalData.reasoning || 'System identified precursor pattern requiring immediate barrier audit.'}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* How to Overcome: Critical Controls (Matching Website AI Output) */}
+                    <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-900 font-mono">
+                          HOW TO OVERCOME: CRITICAL CONTROLS
+                        </span>
+                      </div>
+                      <ul className="space-y-1.5 pt-0.5">
+                        {((Array.isArray(aiAnalysisModalData.recommended_controls) && aiAnalysisModalData.recommended_controls.length > 0)
+                          ? aiAnalysisModalData.recommended_controls
+                          : getDynamicRecommendations(aiAnalysisModalData.category, aiAnalysisModalData.description || '')
+                        ).map((ctrl, i) => (
+                          <li key={i} className="text-xs text-slate-800 font-medium flex items-start gap-2">
+                            <span className="text-emerald-600 font-black mt-0.5 text-sm leading-none">&bull;</span>
+                            <span className="leading-snug">{ctrl}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
 
-                    {/* Auto-Dispatched Unit */}
-                    <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-200 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">
-                          Auto-Dispatched Department
+                    {/* Emergency Responder Protocol & Dispatched Team */}
+                    <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1 font-mono">
+                          <Radio className="w-3 h-3 text-amber-600" /> Responder Protocol &amp; Dispatch
                         </span>
-                        <span className="text-xs font-bold text-slate-900">{aiAnalysisModalData.assigned_department_label}</span>
+                        <span className="text-[9px] font-bold bg-amber-600 text-white px-2 py-0.5 rounded-full font-mono">
+                          {aiAnalysisModalData.assigned_department_label || 'DISPATCHED'}
+                        </span>
                       </div>
-                      <span className="text-[9px] font-bold bg-amber-600 text-white px-2 py-0.5 rounded-full">
-                        LIVE TASK
-                      </span>
+                      <div className="p-2.5 rounded-lg bg-white/90 border border-amber-200/60">
+                        <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">
+                          Responder Action ({aiAnalysisModalData.assigned_department_label}):
+                        </span>
+                        <p className="font-semibold text-slate-900 leading-relaxed text-xs">
+                          {aiAnalysisModalData.recommended_action}
+                        </p>
+                      </div>
                     </div>
 
                     {/* Plant Site Map & Exclusion Zone */}
