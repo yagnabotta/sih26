@@ -419,10 +419,35 @@ export function isUnrelatedIssue(text, checklist = []) {
   if (CONVERSATIONAL_PATTERNS.some(p => p.test(cleaned))) return true;
   if (isCodeOrTechnicalDocumentation(text)) return true;
 
-  // NOTE: The backend's classify_safety_observation_validity() is the
-  // authoritative safety-relevance gate. The frontend only filters
-  // obviously unrelated conversational/trivial input above. All other
-  // input is sent to the backend for proper semantic classification.
+  // 1. Single-letter sequences or delimiter-separated characters (e.g. "a b c d", "a,b,c,d", "a-b-c-d", "a / b / c / d", "1 2 3 4")
+  const tokens = cleaned.split(/[\s,._\-\/\\;:'"|]+/).filter(Boolean);
+  if (tokens.length >= 2 && tokens.every(t => t.length <= 1)) {
+    return true;
+  }
+  if (tokens.length >= 3 && (tokens.reduce((acc, t) => acc + t.length, 0) / tokens.length) < 2.0) {
+    return true;
+  }
+
+  // 2. Repetitive single character (e.g. "aaaa", "bbbb", "xxxx", "1111")
+  if (/^([a-z0-9])\1+$/i.test(cleaned.replace(/[\s,._\-]+/g, ''))) {
+    return true;
+  }
+
+  // 3. Alphabetical / keyboard sequence or test strings
+  const pureAlpha = cleaned.replace(/[^a-z0-9]/g, '');
+  if (/^(?:abcd|abcde|abcdef|1234|12345|123456|asdf|asdfgh|qwerty|zxcv|xyz|qwer|test|testing|sample|demo)$/i.test(pureAlpha)) {
+    return true;
+  }
+
+  // 4. Strings with no vowels at all (length >= 4 and no vowels is almost certainly gibberish keyboard mash in English)
+  const lettersOnly = cleaned.replace(/[^a-z]/g, '');
+  if (lettersOnly.length >= 4 && !/[aeiouy]/.test(lettersOnly)) {
+    const knownSafetyAcronyms = ['loto', 'h2s', 'scba', 'msds', 'hvlv'];
+    if (!knownSafetyAcronyms.some(acr => lettersOnly.includes(acr))) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -1599,11 +1624,8 @@ export default function AIAnalysisView() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="block text-xs sm:text-sm font-black uppercase tracking-wider text-slate-800 font-heading">
-                  INPUT METHOD <span className="text-[11px] font-normal text-slate-400 normal-case">(Select ONE — dual input not allowed)</span>
+                  INPUT METHOD
                 </label>
-                <span className="text-[11px] font-mono font-bold text-slate-500">
-                  {inputMode === 'DESCRIPTION' ? '✍️ Mode: Text Explanation' : '📋 Mode: Safety Checklists'}
-                </span>
               </div>
 
               <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1.5 rounded-2xl border border-stone-200">

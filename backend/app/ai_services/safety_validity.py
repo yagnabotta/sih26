@@ -316,6 +316,30 @@ def classify_safety_observation_validity(text: str) -> Dict[str, Any]:
         logger.debug(f"Safety validation result: {result['validation_category']}, confidence: {result['confidence_score']}")
         return result
 
+    # Check for nonsense, single-letter sequences (e.g. "a b c d", "a,b,c,d", "a-b-c-d", "abcd", "asdf")
+    tokens = [t for t in re.split(r'[\s,._\-\/\\;:\'"]+', lower_cleaned) if t]
+    is_single_letter_sequence = (len(tokens) >= 2 and all(len(t) <= 1 for t in tokens)) or \
+                                (len(tokens) >= 3 and (sum(len(t) for t in tokens) / len(tokens)) < 2.0)
+    pure_alpha = re.sub(r'[^a-z0-9]', '', lower_cleaned)
+    is_repetitive = bool(re.match(r'^([a-z0-9])\1+$', pure_alpha))
+    is_common_mash = pure_alpha in {"abcd", "abcde", "abcdef", "1234", "12345", "123456", "asdf", "asdfgh", "qwerty", "zxcv", "xyz", "qwer", "test", "testing"}
+    letters_only = re.sub(r'[^a-z]', '', lower_cleaned)
+    has_no_vowels = len(letters_only) >= 4 and not bool(re.search(r'[aeiouy]', letters_only)) and not any(acr in letters_only for acr in ['loto', 'h2s', 'scba', 'msds'])
+
+    if is_single_letter_sequence or is_repetitive or is_common_mash or has_no_vowels:
+        result = {
+            "is_valid_safety_observation": False,
+            "is_unrelated": True,
+            "is_insufficient_information": False,
+            "validation_category": "UNRELATED INPUT",
+            "primary_category": "Nonsense / Gibberish Input",
+            "detected_categories": [],
+            "confidence_score": 0.0,
+            "explanation": "The description appears to be random characters or invalid text rather than a workplace safety observation. Please describe a safety hazard, unsafe condition, unsafe act, or near-miss observation."
+        }
+        logger.debug(f"Safety validation result: {result['validation_category']}, confidence: {result['confidence_score']}")
+        return result
+
     # Check for Source Code, Technical Documentation, Docstrings
     is_code, code_reason = is_code_or_technical_documentation(cleaned)
     if is_code:

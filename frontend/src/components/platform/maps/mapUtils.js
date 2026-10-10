@@ -9,10 +9,10 @@ export const INDUSTRIAL_FACILITY_PRESETS = [
     description: 'High-temperature atmospheric crude fractionation tower and furnace'
   },
   {
-    name: 'Vacuum Distillation Unit (VDU)',
-    category: 'Heavy Ends Processing',
+    name: 'Hydrotreater & Desulfurization Unit (HDU)',
+    category: 'Secondary Processing',
     coords: { lat: 12.9728, lng: 77.5962 },
-    description: 'Reduced pressure column for heavy gas oil separation'
+    description: 'High-pressure catalytic sulfur and impurity removal column'
   },
   {
     name: 'Fluid Catalytic Cracking Unit (FCCU)',
@@ -301,7 +301,7 @@ export async function reverseGeocode(lat, lng) {
   if (closestPreset && minDistance <= 0.35) {
     return {
       name: closestPreset.name,
-      address: `${closestPreset.name} (Operating Sector, ${closestPreset.category})`
+      address: `${closestPreset.name} (${closestPreset.category})`
     };
   }
 
