@@ -2842,6 +2842,7 @@ export default function MobileSafetyApp() {
               userLocation={userLocation}
               selectedUnit={operatingUnit}
               onConfirm={handleConfirmLocation}
+              isMobile={true}
             />
 
             {/* BOTTOM NAVIGATION BAR: DOCKED WHITE BAR WITH CENTER VOICE SEARCH BUTTON */}

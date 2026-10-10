@@ -27,11 +27,29 @@ export default function IncidentLocationModal({
   initialLocation,
   userLocation,
   selectedUnit = 'Unit 1',
-  onConfirm
+  onConfirm,
+  isMobile = false
 }) {
   if (!isOpen) return null;
 
   const fallbackUnit = selectedUnit || 'Unit 1';
+
+  const handleSelectSector = (unitKey) => {
+    const unitCoords = {
+      'Unit 1': { lat: 12.9716, lng: 77.5946, name: 'Unit 1 – Crude Distillation Unit (CDU)' },
+      'Unit 2': { lat: 12.9705, lng: 77.5932, name: 'Unit 2 – Fluid Catalytic Cracking (FCCU)' },
+      'Unit 3': { lat: 12.9742, lng: 77.5975, name: 'Unit 3 – Hydrocracker & Hydrogen Unit' },
+      'Unit 4': { lat: 12.9680, lng: 77.5920, name: 'Unit 4 – LPG Bullets & Storage Farm' }
+    };
+    const target = unitCoords[unitKey] || unitCoords['Unit 1'];
+    setCurrentCoords({ lat: target.lat, lng: target.lng });
+    setLocationAddress(target.name);
+    if (mapInstanceRef.current && markerRef.current) {
+      mapInstanceRef.current.setView([target.lat, target.lng], 17, { animate: true });
+      markerRef.current.setLatLng([target.lat, target.lng]);
+    }
+    handleCoordinatesChange(target.lat, target.lng);
+  };
 
   // Initial map center defaults
   const defaultCoords = initialLocation
@@ -351,6 +369,172 @@ export default function IncidentLocationModal({
     });
     onClose();
   };
+
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 sm:absolute z-50 bg-black/60 backdrop-blur-xs flex flex-col justify-end animate-fadeIn select-none">
+        <div className="bg-white rounded-t-[32px] w-full h-[94vh] sm:h-[760px] max-h-[96vh] flex flex-col overflow-hidden shadow-2xl animate-slideUp relative">
+          
+          {/* Mobile Drag Bar & Header */}
+          <div className="p-3.5 pb-2.5 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                <MapPin className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-slate-900 leading-tight">
+                  Pin Incident Location
+                </h3>
+                <span className="text-[10px] text-slate-500 font-medium">
+                  {fallbackUnit} • GPS Coordinates
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleCurrentLocation}
+                disabled={isLocating}
+                title="Current GPS Location"
+                className="px-2 py-1 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors flex items-center gap-1 text-[10px] font-bold cursor-pointer"
+              >
+                <Crosshair className="w-3.5 h-3.5 text-blue-600" />
+                <span>{isLocating ? 'Locating...' : 'GPS'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Map Viewport Area */}
+          <div className="relative flex-1 w-full bg-slate-100 overflow-hidden min-h-[260px]">
+            
+            {/* Top Floating Mobile Controls */}
+            <div className="absolute top-2.5 left-2.5 right-2.5 z-[1000] flex flex-col gap-1.5 pointer-events-none">
+              
+              {/* Layer Toggle Pills */}
+              <div className="flex items-center justify-between pointer-events-auto">
+                <div className="bg-white/95 backdrop-blur-md rounded-xl p-0.5 shadow-md border border-slate-200 flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMapType('street')}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                      mapType === 'street'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Street
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMapType('satellite')}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                      mapType === 'satellite'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Satellite
+                  </button>
+                </div>
+
+                <div className="bg-white/90 backdrop-blur-md px-2.5 py-1 rounded-xl shadow-xs border border-slate-200 text-[9px] font-bold text-slate-700 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Interactive Map</span>
+                </div>
+              </div>
+
+              {/* Quick Sector Selector Pills */}
+              <div className="flex items-center gap-1 overflow-x-auto pb-0.5 custom-scrollbar pointer-events-auto">
+                {[
+                  { id: 'Unit 1', label: 'Unit 1 (CDU)' },
+                  { id: 'Unit 2', label: 'Unit 2 (FCC)' },
+                  { id: 'Unit 3', label: 'Unit 3 (Hydro)' },
+                  { id: 'Unit 4', label: 'Unit 4 (Flare)' }
+                ].map(sector => (
+                  <button
+                    key={sector.id}
+                    type="button"
+                    onClick={() => handleSelectSector(sector.id)}
+                    className="px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-slate-200 hover:border-blue-400 text-slate-700 hover:text-blue-700 font-mono font-bold text-[9px] whitespace-nowrap shadow-xs cursor-pointer active:scale-95 transition-all"
+                  >
+                    {sector.label}
+                  </button>
+                ))}
+              </div>
+
+            </div>
+
+            {/* Leaflet Map Div */}
+            <div ref={mapContainerRef} className="w-full h-full" />
+
+            {/* Hint Overlay */}
+            <div className="absolute bottom-2 left-2 right-2 z-[1000] bg-white/95 backdrop-blur-md px-2.5 py-1 rounded-xl shadow-xs border border-slate-200 text-[10px] font-semibold text-slate-600 flex items-center justify-center gap-1.5 pointer-events-none text-center">
+              <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse shrink-0" />
+              <span>Drag orange pin or tap map to position hazard</span>
+            </div>
+
+          </div>
+
+          {/* Bottom Confirmation Drawer */}
+          <div className="p-3.5 bg-white border-t border-slate-100 space-y-2.5 shrink-0">
+            
+            <div className="p-2.5 rounded-xl bg-gradient-to-r from-blue-50/80 to-indigo-50/60 border border-blue-200/80 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <MapPin className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1">
+                    <span className="px-1 py-0.2 rounded bg-white text-blue-800 font-mono font-bold text-[9px] border border-blue-200">
+                      {fallbackUnit}
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-900 truncate block">
+                      {locationAddress || fallbackUnit}
+                    </span>
+                  </div>
+                  <p className="text-[9px] text-slate-500 font-mono truncate">
+                    {currentCoords.lat.toFixed(5)}° N, {currentCoords.lng.toFixed(5)}° E
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Confirm & Cancel Buttons */}
+            <div className="space-y-1.5 pt-0.5">
+              <button
+                type="button"
+                onClick={handleConfirmLocation}
+                disabled={isReverseGeocoding}
+                className="w-full py-3 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 active:scale-[0.98] text-white font-bold text-xs tracking-wide shadow-md shadow-blue-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <Check className="w-4 h-4 stroke-[3]" />
+                <span>Confirm Incident Location</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-1.5 text-center text-[11px] font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto animate-in fade-in duration-200">
