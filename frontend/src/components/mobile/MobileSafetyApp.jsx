@@ -2821,26 +2821,7 @@ export default function MobileSafetyApp() {
                       </div>
                     </div>
 
-                    {/* Plant Site Map & Exclusion Zone */}
-                    <div className="space-y-1.5 pt-1">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                        <MapPin className="w-3.5 h-3.5 text-blue-600" /> Plant Site Map & Sector Pin
-                      </span>
-                      <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-2xs">
-                        <IncidentPostAnalysisMap
-                          incidentLocation={aiAnalysisModalData.incidentLocation || {
-                            latitude: 12.9716,
-                            longitude: 77.5946,
-                            name: aiAnalysisModalData.location || operatingUnit,
-                            address: aiAnalysisModalData.location || operatingUnit
-                          }}
-                          riskScore={aiAnalysisModalData.risk_score || 75}
-                          riskLevel={aiAnalysisModalData.is_sif ? 'High Risk' : 'Medium Risk'}
-                          incidentType={aiAnalysisModalData.type || 'Near Miss'}
-                          reportName={aiAnalysisModalData.title}
-                        />
-                      </div>
-                    </div>
+
 
                   </div>
 
