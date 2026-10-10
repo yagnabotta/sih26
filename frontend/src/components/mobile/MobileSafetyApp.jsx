@@ -1281,31 +1281,6 @@ export default function MobileSafetyApp() {
               {activeTab === 'home' && (
                 <div className="space-y-5 animate-fadeIn">
                   
-                  {/* RECENT ALERT BANNER CARD */}
-                  <div 
-                    onClick={() => setActiveTab('incidents')}
-                    className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center gap-3.5 hover:shadow-md transition-all cursor-pointer"
-                  >
-                    <div className="w-12 h-12 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
-                      <div className="w-8 h-8 rounded-lg bg-red-500 flex items-center justify-center shadow-xs">
-                        <AlertTriangle className="w-5 h-5 text-white" />
-                      </div>
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-slate-900 text-sm leading-tight truncate">
-                        {latestAlert.title}
-                      </div>
-                      <div className="text-xs text-slate-500 truncate mt-0.5">
-                        {latestAlert.subtitle}
-                      </div>
-                      <div className="text-[11px] text-slate-400 font-medium mt-1">
-                        {latestAlert.time}
-                      </div>
-                    </div>
-
-                    <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-                  </div>
 
                   {/* INCIDENT OVERVIEW (2x2 GRID) */}
                   <div className="space-y-3">
