@@ -2806,25 +2806,6 @@ export default function MobileSafetyApp() {
                     </button>
                   </div>
 
-                  {/* Location Info Banner */}
-                  <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                        Facility Unit & Address
-                      </span>
-                      <span className="text-xs font-bold text-slate-900">
-                        {locationViewIncident.incidentLocation?.address || locationViewIncident.facility_unit || locationViewIncident.location}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase font-mono border ${
-                        locationViewIncident.is_sif ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      }`}>
-                        {locationViewIncident.is_sif ? '🚨 SIF' : '✅ NON-SIF'}
-                      </span>
-                    </div>
-                  </div>
-
                   {/* Plant Site Map & Sector Pin */}
                   <div className="space-y-1.5 pt-1">
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
@@ -2839,7 +2820,7 @@ export default function MobileSafetyApp() {
                           address: locationViewIncident.incident_address || locationViewIncident.facility_unit || locationViewIncident.location || 'Unit 1'
                         }}
                         riskScore={locationViewIncident.risk_score || 75}
-                        riskLevel={locationViewIncident.is_sif ? 'High Risk' : 'Medium Risk'}
+                        riskLevel={locationViewIncident.is_sif ? 'SIF' : 'NON-SIF'}
                         incidentType={locationViewIncident.category || locationViewIncident.report_type || 'Near Miss'}
                         reportName={locationViewIncident.title || locationViewIncident.report_name}
                       />
