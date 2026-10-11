@@ -127,7 +127,8 @@ LSR_DEFINITIONS = {
         "keywords": [
             r'\bhot work\b', r'\bwelding\b', r'\bgrinding\b', r'\bsparks\b',
             r'\bflammable\b', r'\bcombustible\b', r'\btorch cutting\b', r'\bfire watch\b',
-            r'\bfire\b', r'\bexplosion\b', r'\bhydrocarbon leak\b', r'\bgas release\b'
+            r'\bfire\b', r'\bexplosion\b', r'\bhydrocarbon leak\b', r'\bgas release\b',
+            r'\bgas\s+(?:is\s+)?leak\w*\b', r'\bgas leak\w*\b', r'\bleak\w* gas\b', r'\bgas leakage\b', r'\bflammable gas\b'
         ],
         "mandatory_controls": [
             "Dedicated fire watch stationed with charged fire extinguisher for 30 min post-work",

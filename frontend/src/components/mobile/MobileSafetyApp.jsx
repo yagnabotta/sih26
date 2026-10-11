@@ -1115,6 +1115,8 @@ export default function MobileSafetyApp() {
       let reasoning = '';
       let refId = '';
 
+      const details = extractAiIncidentDetails(activeText, humanCategoryLabel);
+
       if (backendResult) {
         if (backendResult.is_unrelated || (backendResult.determination_status || '').toUpperCase() === 'UNRELATED INPUT' || backendResult.report_name === 'Unrelated Input') {
           clearTimeout(step2Timer);
@@ -1138,9 +1140,9 @@ export default function MobileSafetyApp() {
           : typeof backendResult.risk_score === 'number'
           ? backendResult.risk_score
           : calculateDynamicRiskScore(backendResult.hazard, backendResult.energy_vector, backendResult.worker_exposure, backendResult.barrier_status, sifVal, activeText, selectedChecklist);
-        energyVector = backendResult.energy_vector || (isSIF ? 'High Energy Vector' : 'Low Mechanical Kinetic');
-        lifeSavingRule = backendResult.life_saving_rule || backendResult.iogp_rule || (isSIF ? 'Line of Fire (LSR-03)' : 'Workplace Housekeeping Standards');
-        recommendedAction = (backendResult.recommended_controls && backendResult.recommended_controls[0]) || (backendResult.corrective_actions && backendResult.corrective_actions[0]) || 'Implement immediate barrier restoration and audit.';
+        energyVector = (backendResult.energy_vector && backendResult.energy_vector !== 'UNKNOWN') ? backendResult.energy_vector : details.energyVector;
+        lifeSavingRule = (backendResult.life_saving_rule && backendResult.life_saving_rule !== 'General Workplace Housekeeping Standards') ? backendResult.life_saving_rule : (isSIF ? (details.lifeSavingRule || 'Hot Work & Fire Prevention (LSR-07)') : 'Workplace Housekeeping Standards');
+        recommendedAction = (backendResult.recommended_controls && backendResult.recommended_controls[0]) || (backendResult.corrective_actions && backendResult.corrective_actions[0]) || details.recommendedAction || 'Implement immediate barrier restoration and audit.';
         barrierStatus = backendResult.barrier_status || (isSIF ? 'CRITICAL BARRIER FAILED' : 'BARRIER ADEQUATE');
         reasoning = backendResult.explanation || backendResult.explainable_reasoning || getDynamicExplanation(sifVal, backendResult.hazard, energyVector, 'Personnel in operational zone', barrierStatus, activeText);
         refId = backendResult.report_reference || `REP-ID001-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -1158,7 +1160,6 @@ export default function MobileSafetyApp() {
         const evalResult = evaluateSIFPrecursor(activeText, humanCategoryLabel, humanCategoryLabel);
         isSIF = evalResult.isSIF;
         dynamicRiskScore = evalResult.riskScore || (isSIF ? 88 : 35);
-        const details = extractAiIncidentDetails(activeText, humanCategoryLabel);
         energyVector = details.energyVector;
         lifeSavingRule = details.lifeSavingRule;
         recommendedAction = details.recommendedAction;
@@ -1166,8 +1167,6 @@ export default function MobileSafetyApp() {
         reasoning = getDynamicExplanation(isSIF ? 'YES' : 'NO', details.lifeSavingRule, energyVector, 'Field Personnel Exposed', barrierStatus, activeText);
         refId = `REP-ID001-${Math.floor(1000 + Math.random() * 9000)}`;
       }
-
-      const details = extractAiIncidentDetails(activeText, humanCategoryLabel);
 
       const newRecord = {
         id: Date.now(),

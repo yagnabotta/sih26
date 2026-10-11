@@ -316,7 +316,8 @@ def extract_energy_utility(
 
     # Critical High-Energy Vectors (0.85 - 0.95)
     if any(k in e_low or any(k in s for s in detected_sources) or k in t_low for k in [
-        "high pressure", "high-pressure", "pressurized", "hydraulic", "pneumatic", "blowout", "psi", "bar"
+        "high pressure", "high-pressure", "pressurized", "hydraulic", "pneumatic", "blowout", "psi", "bar",
+        "gas leak", "gas leakage", "leaking gas", "gas is leaking", "gas leaking", "gas release", "flammable gas", "hydrocarbon gas"
     ]):
         return 0.95
     if any(k in e_low or any(k in s for s in detected_sources) or k in t_low for k in [
@@ -957,8 +958,9 @@ def assess_sif_precursor(
         any(k in h_low or k in e_low or k in t_low for k in [
             "suspended load", "dropped object", "fall from height", "work at height",
             "arc flash", "electrical", "confined space", "atmospheric", "high pressure",
-            "high-pressure", "pressurized", "gas leak", "blowout", "toxic gas", "vehicle",
-            "crane", "flame", "thermal", "heat", "line of fire", "line-of-fire", "loto", "lockout"
+            "high-pressure", "pressurized", "gas leak", "gas leakage", "leaking gas", "gas is leaking", "gas leaking", "gas release", "flammable gas",
+            "blowout", "toxic gas", "vehicle", "crane", "flame", "thermal", "heat",
+            "line of fire", "line-of-fire", "loto", "lockout"
         ])
     )
     is_minor_slip = any(k in h_low for k in ["slip", "trip", "surface housekeeping"]) and not has_high_energy_source

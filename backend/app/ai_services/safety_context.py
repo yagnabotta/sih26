@@ -136,19 +136,36 @@ def is_spreading_process_fire(text: str) -> bool:
 
 def is_critical_toxic_or_chemical_release(text: str) -> bool:
     """
-    Detects life-threatening toxic gas releases (e.g. H2S > 50 ppm, IDLH atmospheres)
-    or uncontained major hazardous chemical spills (> 20L corrosive/toxic).
+    Detects life-threatening toxic gas releases (e.g. H2S > 50 ppm, IDLH atmospheres),
+    major uncontained gas leaks/releases, or uncontained major hazardous chemical spills (> 20L corrosive/toxic).
     """
     if not text or not isinstance(text, str):
         return False
     if is_negative_context(text):
         return False
     t = text.lower()
-    return any(k in t for k in [
+    
+    # Critical toxic, chemical, or major gas release terms
+    critical_terms = [
         "h2s alarm triggered", "85 ppm", "100 ppm", "320 ppm", "500 ppm", "toxic cloud",
         "hydrofluoric acid", "50 liters of 70%", "5000-liter hot caustic", "acid sprayed directly onto",
-        "fatal atmospheric asphyxiation", "unbunded gravel"
-    ])
+        "fatal atmospheric asphyxiation", "unbunded gravel",
+        "large gas leak", "very large gas leak", "large gas leakage", "very large gas leakage",
+        "high gas leak", "very high gas leak", "major gas leak", "major gas leakage",
+        "massive gas leak", "massive gas leakage", "uncontained gas leak", "uncontained gas leakage",
+        "gas leakage at construction", "gas leak at construction", "gas leak at", "gas leakage at",
+        "flammable gas cloud", "escaping gas cloud", "pipeline gas leak", "pipeline gas leakage",
+        "toxic gas leak", "toxic gas leakage", "natural gas leak", "ammonia leak", "chlorine leak",
+        "gas is leaking", "gas leaking"
+    ]
+    if any(k in t for k in critical_terms):
+        return True
+
+    # General gas leak / release pattern in active operational or construction environments
+    if any(k in t for k in ["gas leak", "gas leakage", "leaking gas", "gas is leaking", "gas release", "escaping gas", "flammable gas"]):
+        return True
+
+    return False
 
 
 def is_vague_or_missing_info(text: str) -> bool:

@@ -522,7 +522,7 @@ export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatu
 
   // 1. Energy utility (0.0 - 1.0)
   let eU = 0.35;
-  if (/high[- ]pressure|pressurized|hydraulic|pneumatic|blowout|psi|bar/.test(combText) || /pressure|pneumatic|hydraulic/.test(eLow)) {
+  if (/high[- ]pressure|pressurized|hydraulic|pneumatic|blowout|psi|bar|gas leak|gas leakage|leaking gas|gas is leaking|gas release|flammable gas/.test(combText) || /pressure|pneumatic|hydraulic|gas/.test(eLow)) {
     eU = 0.95;
   } else if (/electrical|arc flash|voltage|11kv|415v|switchgear/.test(combText) || /electrical/.test(eLow)) {
     eU = 0.95;
@@ -544,7 +544,7 @@ export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatu
   let exU = 0.40;
   if (/not exposed|zero exposure|no personnel/.test(combText) || /not exposed/.test(exLow)) {
     exU = 0.0;
-  } else if (/line[- ]of[- ]fire|under load|under suspended load|drop zone/.test(combText) || /line-of-fire/.test(exLow)) {
+  } else if (/line[- ]of[- ]fire|under load|under suspended load|drop zone|gas leak|gas leakage|gas is leaking|gas release/.test(combText) || /line-of-fire/.test(exLow)) {
     exU = 0.95;
   } else if (/confined space|inside vessel|tank entry/.test(combText) || /confined space/.test(exLow)) {
     exU = 0.92;
@@ -571,7 +571,7 @@ export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatu
   let hMod = 1.0;
   if (/loto|lockout|isolation|confined space/.test(combText)) {
     hMod = 1.15;
-  } else if (/line[- ]of[- ]fire|high[- ]pressure|suspended load|electrical/.test(combText)) {
+  } else if (/line[- ]of[- ]fire|high[- ]pressure|suspended load|electrical|gas leak|gas leakage/.test(combText)) {
     hMod = 1.12;
   } else if (/fall|height|scaffold/.test(combText)) {
     hMod = 1.10;
@@ -617,8 +617,8 @@ export function calculateDynamicRiskScore(hazard, energy, exposure, barrierStatu
     overrideFloor = 94;
   } else if (/rapidly spreading|spreading fire|spreading to pipe|spreading across|growing fast|uncontrolled hydrocarbon fire|uncontained fire|jet fire|fire expanding|flames spreading|flames leaped/.test(combText) || (/fire|flames/.test(combText) && /cdu heater|pipe racks|piperack|tank farm|tank 304|bund fire/.test(combText))) {
     overrideFloor = 92;
-  } else if (/h2s alarm triggered|85 ppm|100 ppm|320 ppm|hydrofluoric acid|50 liters of 70%|5000-liter hot caustic|acid sprayed directly onto/.test(combText)) {
-    overrideFloor = 90;
+  } else if (/h2s alarm triggered|85 ppm|100 ppm|320 ppm|hydrofluoric acid|50 liters of 70%|5000-liter hot caustic|acid sprayed directly onto|gas leak|gas leakage|gas is leaking|leaking gas|gas release|flammable gas/.test(combText)) {
+    overrideFloor = 88;
   } else if (/loto|lockout|not locked out/.test(combText) && (eU >= 0.85 || /electrical|pressure/.test(combText)) && (exU >= 0.70 || /line of fire/.test(combText))) {
     overrideFloor = 88;
   } else if (/confined space|tank entry/.test(combText) && (/gas test|loto|bypassed/.test(combText) || bEff <= 0.40)) {

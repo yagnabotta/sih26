@@ -101,7 +101,7 @@ def analyze_energy_and_exposure(text: str) -> Dict[str, Any]:
     detected_sources: List[str] = []
 
     # 1. HIGH_PRESSURE / PNEUMATIC / HYDRAULIC
-    if re.search(r'\b(pressurized|pressure|hydraulic|pneumatic|high[- ]pressure|high pressure|blowout|hydrotest|wellhead|choke manifold|bop|steam line|gas line|pipe burst|ruptured hose|psi|bar|stored pressure|sweet gas|sour gas|flange packing|discharge valve|hissing gas)\b', lower_text):
+    if re.search(r'\b(pressurized|pressure|hydraulic|pneumatic|high[- ]pressure|high pressure|blowout|hydrotest|wellhead|choke manifold|bop|steam line|gas line|pipe burst|ruptured hose|psi|bar|stored pressure|sweet gas|sour gas|flange packing|discharge valve|hissing gas|gas\s+(?:is\s+)?leak\w*|gas leak\w*|leak\w* gas|gas release|escaping gas|flammable gas|compressed gas|cng|lpg|methane|propane|butane|natural gas)\b', lower_text):
         detected_sources.append("HIGH_PRESSURE / PNEUMATIC / HYDRAULIC")
 
     # 2. ELECTRICAL
@@ -109,7 +109,7 @@ def analyze_energy_and_exposure(text: str) -> Dict[str, Any]:
         detected_sources.append("ELECTRICAL")
 
     # 3. TOXIC / ATMOSPHERIC
-    if re.search(r'\b(toxic gas|h2s|hydrogen sulfide|oxygen deficiency|nitrogen|toxic atmosphere|confined space|vessel entry|entering the vessel|entered the vessel|inside the vessel|inside the tank|tank entry|gas test|gas testing|atmospheric monitoring|air monitoring|ppm|rotten egg)\b', lower_text):
+    if re.search(r'\b(toxic gas|h2s|hydrogen sulfide|oxygen deficiency|nitrogen|toxic atmosphere|confined space|vessel entry|entering the vessel|entered the vessel|inside the vessel|inside the tank|tank entry|gas test|gas testing|atmospheric monitoring|air monitoring|ppm|rotten egg|hazardous atmosphere|flammable atmosphere|gas cloud|gas\s+(?:is\s+)?leak\w*|gas leak\w*|gas release)\b', lower_text):
         detected_sources.append("TOXIC / ATMOSPHERIC")
 
     # 4. GRAVITY (Explicit elevation or falling heavy mass)
@@ -159,6 +159,8 @@ def analyze_energy_and_exposure(text: str) -> Dict[str, Any]:
         exposure = "Worker exposed to operational hazard without mandatory personal protective equipment"
     elif re.search(r'\b(not_exposed|not in line of fire|zero exposure)\b', lower_text):
         exposure = "Personnel confirmed not exposed to hazardous energy trajectory"
+    elif re.search(r'\b(gas\s+(?:is\s+)?leak\w*|gas leak\w*|leak\w* gas|gas release|escaping gas|flammable gas|gas cloud|toxic gas|h2s)\b', lower_text):
+        exposure = "Worker positioned in hazardous flammable / toxic gas dispersion hazard zone"
     elif re.search(r'\b(heat|burn|heat exposure)\b', lower_text):
         exposure = "Worker exposed to intense thermal energy / extreme heat source"
     elif re.search(r'\b(slip\w*|slippery|trip|walkway|entrance|door|floor)\b', lower_text):

@@ -80,7 +80,7 @@ export function evaluateSIFPrecursor(text, hazard, reportType) {
     'high-pressure', 'high pressure', 'flange', 'blowout', 'explosion', 'vapor cloud',
     'crane', 'hoist', 'rigging', 'dropped', 'casing', 'suspended load', 'sling',
     'electrical', '11kv', '415v', 'arc flash', 'switchgear', 'loto', 'zero-energy',
-    'fall', 'height', 'scaffold', 'harness', 'toxic', 'h2s', 'gas leak', 'leaking gas',
+    'fall', 'height', 'scaffold', 'harness', 'toxic', 'h2s', 'gas leak', 'gas leakage', 'leaking gas', 'gas is leaking', 'gas leaking', 'gas release', 'flammable gas',
     'fire', 'flame', 'spark', 'welding', 'flash fire', 'confined space', 'oxygen',
     'steam', 'acid', 'chemical', 'pulley'
   ];
@@ -108,7 +108,7 @@ export function evaluateSIFPrecursor(text, hazard, reportType) {
   if (match) {
     if (combined.includes('explosion') || combined.includes('asphyxiation') || combined.includes('blowout')) score = 97;
     else if (combined.includes('dropped') || combined.includes('casing') || combined.includes('sling')) score = 96;
-    else if (combined.includes('11kv') || combined.includes('loto') || combined.includes('gas leak')) score = 95;
+    else if (combined.includes('11kv') || combined.includes('loto') || combined.includes('gas leak') || combined.includes('gas leakage') || combined.includes('gas release') || combined.includes('gas is leaking')) score = 95;
     else if (combined.includes('arc flash') || combined.includes('switchboard') || combined.includes('steam')) score = 94;
     else if (combined.includes('fall') || combined.includes('scaffold') || combined.includes('height')) score = 93;
     else if (combined.includes('fire') || combined.includes('welding') || combined.includes('acid')) score = 91;
